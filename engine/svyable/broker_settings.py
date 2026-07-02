@@ -1,0 +1,86 @@
+"""Runtime settings for Tastytrade connectivity and dashboard safety.
+
+Secrets are loaded from the environment (optionally via ``engine/.env``).  The
+new ``TASTY_*`` names are canonical; legacy ``TT_*`` aliases remain accepted so
+existing local automation does not break during migration.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+def _as_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _first_env(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value.strip()
+    return default
+
+
+@dataclass(frozen=True)
+class TastySettings:
+    client_secret: str
+    refresh_token: str
+    account_number: str
+    is_test: bool = True
+    live_enabled: bool = False
+    audit_path: Path = Path("outputs/audit/tastytrade.jsonl")
+
+    @property
+    def environment(self) -> str:
+        return "sandbox" if self.is_test else "production"
+
+    @classmethod
+    def from_env(cls, *, require_credentials: bool = True) -> "TastySettings":
+        load_dotenv()
+
+        client_secret = _first_env("TASTY_CLIENT_SECRET", "TT_CLIENT_SECRET")
+        refresh_token = _first_env("TASTY_REFRESH_TOKEN", "TT_REFRESH_TOKEN")
+        account_number = _first_env("TASTY_ACCOUNT_NUMBER", "TT_ACCOUNT")
+
+        explicit_test = os.getenv("TASTY_IS_TEST")
+        if explicit_test is None:
+            legacy_env = _first_env("SVYABLE_ENV", "TT_ENV", default="sandbox").lower()
+            is_test = legacy_env != "production"
+        else:
+            is_test = _as_bool(explicit_test, default=True)
+
+        live_enabled = _as_bool(os.getenv("SVYABLE_ENABLE_LIVE"), default=False)
+        default_out = "outputs" if is_test else "outputs-production"
+        audit_path = Path(
+            os.getenv("SVYABLE_TASTY_AUDIT_PATH", f"{default_out}/audit/tastytrade.jsonl")
+        )
+
+        missing = [
+            name
+            for name, value in {
+                "TASTY_CLIENT_SECRET": client_secret,
+                "TASTY_REFRESH_TOKEN": refresh_token,
+                "TASTY_ACCOUNT_NUMBER": account_number,
+            }.items()
+            if not value
+        ]
+        if require_credentials and missing:
+            raise ValueError(
+                "Missing Tastytrade environment variables: " + ", ".join(missing)
+            )
+
+        return cls(
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+            account_number=account_number,
+            is_test=is_test,
+            live_enabled=live_enabled,
+            audit_path=audit_path,
+        )
