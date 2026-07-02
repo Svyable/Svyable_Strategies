@@ -25,6 +25,8 @@ Implemented today:
 - Local paper broker, rebalancer, reconciliation, SQLite ledger, and health reporting.
 - Tastytrade connectivity for account state, quotes, broker preflight, order lifecycle, and audit evidence.
 - Tastytrade trade-history normalization with fill prices, fees, venues, and signed slippage.
+- Idempotent delayed/partial-fill recovery keyed by broker order and transaction IDs.
+- Configurable warning and critical slippage escalation thresholds.
 - Streamlit operations console for strategy, broker, rebalance, order supervision, reconciliation, execution quality, and audit.
 - Fully isolated sandbox and production output roots.
 
@@ -53,7 +55,8 @@ DataProvider
   -> Broker preflight
   -> Tastytrade sandbox execution
   -> Order polling and trade-history capture
-  -> Fill slippage / fees / venue evidence
+  -> Idempotent delayed/partial-fill backfill
+  -> Fill slippage / fees / venue evidence and escalation
   -> Reconciliation + ledger + dashboard + human PM review
 ```
 
@@ -87,6 +90,7 @@ The immediate conversion target is Tastytrade: translate Q23-derived daily alpha
 | Tastytrade SDK adapter | Implemented / gated | Typed community SDK path for dashboard and order workflow |
 | Legacy Tastytrade REST adapter | Retained | Supports existing DXLink, universe, and CLI integration during migration |
 | Fill-quality ledger | Implemented | Transaction ID, broker order, quantity, price, reference, slippage, fees, and venue |
+| Fill backfill | Implemented | Re-queries recent orders, records only unseen transaction IDs, captures later partial fills |
 | Streamlit console | Implemented | Observability, ADV-aware plans, preflight, sandbox execution, polling, cancellation, reconciliation, fill quality, audit |
 | Production Streamlit rebalance | Disabled | Requires completed gates and a sustained sandbox operating record |
 | CLI rebalancer | Implemented / validating | Reference automation path while the dashboard operating record develops |
@@ -118,6 +122,8 @@ TASTY_IS_TEST=true
 SVYABLE_ENV=sandbox
 SVYABLE_OUTPUT_ROOT=outputs
 SVYABLE_ENABLE_LIVE=false
+SVYABLE_SLIPPAGE_WARN_BPS=15
+SVYABLE_SLIPPAGE_CRITICAL_BPS=30
 ```
 
 Never commit `.env`. The repository ignores it.
@@ -147,7 +153,7 @@ The server binds to `127.0.0.1:8501` by default. Override with `SVYABLE_STREAMLI
 - **Strategy** — latest targets, gross budget, sleeve trust, IC health, factor weights, metadata, and morning report.
 - **Broker** — masked account identity, balances, positions, same-day orders, order-status lookup, guarded cancellation, reconciliation, and quotes.
 - **Rebalance** — target-vs-position plan using persisted ADV/liquidity state, live quote validation, broker preflight, sandbox submission, polling, transaction capture, and post-order reconciliation.
-- **Audit** — order ledger, fill-level slippage and fees, operational events, and append-only Tastytrade intent/preflight/response records.
+- **Audit** — order ledger, delayed/partial-fill backfill, fill-level slippage and fees, operational events, and append-only Tastytrade intent/preflight/response records.
 
 ### Dashboard safety invariants
 
@@ -159,7 +165,10 @@ The server binds to `127.0.0.1:8501` by default. Override with `SVYABLE_STREAMLI
 - Any broker warning or error blocks submission.
 - Submitted sandbox orders are polled and followed by broker-vs-target reconciliation.
 - Fill capture is linked by broker order ID and scored against the plan reference price.
+- Transaction IDs are uniquely indexed; repeated backfills cannot duplicate fill rows.
+- Backfill re-queries all recent linked orders so later partial fills remain discoverable.
 - Positive slippage means worse execution for both buys and sells.
+- Slippage at or above configured warning/critical thresholds creates ledger events.
 - Fill-capture failures are logged as operational warnings rather than silently discarded.
 - Intent, preflight, response, cancellation, and fill evidence are persisted locally.
 - Account numbers are masked in read-only dashboard views.
@@ -201,6 +210,7 @@ No live-capital operation until all three gates pass.
 - Pre-trade checks enforce leverage, cash, ADV participation, and position limits.
 - Intended, preflighted, submitted, filled, and actual positions reconcile.
 - Fill slippage, fees, and venue data are observable and reviewed.
+- Delayed and partial fills are recovered without duplicate accounting.
 - Shadow-vs-paper drift is visible and within an accepted operating band.
 - Failure escalation and a dead-man heartbeat are operational.
 - A sustained sandbox record demonstrates repeatable daily operation.
@@ -211,7 +221,7 @@ No live-capital operation until all three gates pass.
 2. **Daily compute** — build the panel and emit targets plus price/ADV/liquidity evidence.
 3. **PM review** — inspect data health, risk, drift, factors, targets, and proposed orders.
 4. **Broker preflight** — estimate buying-power and fee effects; block on warnings/errors.
-5. **Sandbox execution** — submit, poll, capture fills, score slippage, record account equity, and reconcile.
+5. **Sandbox execution** — submit, poll, capture/backfill fills, score slippage, record account equity, and reconcile.
 6. **Production operation** — unavailable until every gate passes.
 
 ## Performance language
@@ -240,6 +250,7 @@ engine/svyable/                    active strategy and operations implementation
 engine/svyable/streamlit_app.py    dashboard composition
 engine/svyable/dashboard_*.py      dashboard services and views
 engine/svyable/execution_control.py ADV-aware planning, polling, reconciliation
+engine/svyable/execution_backfill.py delayed/partial-fill recovery and escalation
 engine/svyable/execution_quality.py fill normalization and signed slippage
 engine/svyable/tastytrade_sdk.py   typed community-SDK broker adapter
 engine/svyable/tastytrade.py       retained REST/DXLink-compatible adapter
@@ -250,7 +261,7 @@ ops/CLAUDE_LOOP.md                 scheduled review/supervision loop
 ## Next actions
 
 1. Run a secret-managed sandbox integration test against the configured account.
-2. Add retry/backfill logic for transaction history that appears after the initial poll window.
-3. Add explicit slippage budgets and escalation thresholds by order size/liquidity bucket.
+2. Add scheduled automatic fill backfill and an external operational heartbeat.
+3. Calibrate slippage budgets by order size and liquidity bucket using the sandbox record.
 4. Accumulate point-in-time universe snapshots and source historical membership data.
 5. Establish a sustained paper operating record before considering any live-capital path.
