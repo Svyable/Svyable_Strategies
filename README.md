@@ -21,6 +21,12 @@ Panel(OHLCV) → factors → IC-weighted sleeves → composite score → seats/t
 
 Steps through target weights exist in Q23 today; the rebalancer and broker adapters are the build (plan.md Phases 0–5).
 
+## Iteration workflow (sandbox → prod)
+
+- **Environments are fully isolated**: `--env sandbox` (default) vs `--env production` give separate data caches, outputs, and ledgers (`outputs-production/`, `data-cache-production/`); `SVYABLE_ENV` sets the default. PROD's record can never be contaminated by a dev run.
+- **Morning orchestration (8:00 ET)**: `svyable session` — validates OAuth (never-expiring grant → 15-min access tokens auto-refresh all day), mints the 24h DXLink quote token, snapshots the universe. Then the 07:30 launchd daily run + `svyable dashboard` (self-contained HTML at `engine/outputs/dashboard.html`, regenerated every run).
+- **Change discipline**: work on a branch; `tests/golden_weights.json` is the behavior contract — any weight-changing edit fails tests until you deliberately re-bless it in the same commit; walk-forward report accompanies any parameter change; merge to main = what PROD runs. Compare envs with `svyable --env sandbox health` vs `svyable --env production health`.
+
 ## Next actions
 
 1. Phase 0 (plan.md): extract `DataProvider` interface from Q23's `data_loader.py` — behavior-preserving, verified by byte-identical backtest CSVs.

@@ -74,6 +74,34 @@ def cmd_daily(args) -> int:
         report["status"] = "degraded"
         report.setdefault("issues", []).append(f"stale: have {have}, expected {want}")
 
+    # cross-provider close check: compare panel closes vs an independent
+    # tastytrade snapshot; >25bps median divergence on liquid names = bad feed
+    try:
+        import os as _os
+        if (_os.environ.get("TT_REFRESH_TOKEN") or _os.environ.get("TT_USERNAME")):
+            from svyable.tastytrade import TastytradeBroker
+            b = TastytradeBroker(env=args.env,
+                                 allow_production=(args.env == "production"))
+            sample = list(panel.close.iloc[-1].dropna().sort_values().index[-25:])
+            snap = b.get_market_snapshot(sample)
+            diffs = []
+            for sym in sample:
+                ref = (snap.get(sym) or {}).get("prev_close") or \
+                      (snap.get(sym) or {}).get("close")
+                own = float(panel.close.iloc[-1].get(sym, float("nan")))
+                if ref and own == own:
+                    diffs.append(abs(own / ref - 1.0) * 1e4)
+            if diffs:
+                import statistics
+                med = float(statistics.median(diffs))
+                print(f"cross-provider close check: median {med:.1f} bps over {len(diffs)} names")
+                if med > 25:
+                    report["status"] = "degraded"
+                    report.setdefault("issues", []).append(
+                        f"cross-provider divergence {med:.0f} bps vs tastytrade")
+    except Exception as e:  # noqa: BLE001 — the check must never block the run
+        print(f"cross-provider check skipped: {e}", file=sys.stderr)
+
     if report["status"] != "ok":
         print(f"DATA DEGRADED: {report['issues']}", file=sys.stderr)
         led.record_event("warning", "data", f"degraded: {report['issues']}")

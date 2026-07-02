@@ -113,10 +113,39 @@ def test_ledger_roundtrip(tmp_path=None):
         led.close()
 
 
+def test_nw_tstat_corrects_overlap():
+    """On an overlapping (autocorrelated) series, NW t must be well below the
+    naive t; on iid noise they should roughly agree."""
+    from svyable.analysis import nw_tstat
+    rng = np.random.default_rng(11)
+    iid = pd.Series(rng.normal(0.02, 0.1, 1500))
+    overlapped = iid.rolling(21).mean().dropna() * 21   # induce 21-day overlap
+    t_naive = float(overlapped.mean() / overlapped.std() * np.sqrt(len(overlapped)))
+    t_nw = nw_tstat(overlapped, lag=21)
+    assert t_nw < 0.5 * t_naive, f"NW ({t_nw:.1f}) should shrink naive ({t_naive:.1f})"
+    t_iid_naive = float(iid.mean() / iid.std() * np.sqrt(len(iid)))
+    t_iid_nw = nw_tstat(iid, lag=21)
+    assert abs(t_iid_nw - t_iid_naive) < 0.5 * abs(t_iid_naive) + 1.0
+
+
+def test_bad_print_detection():
+    panel = SyntheticProvider(n_assets=10, n_days=400, seed=5).get_panel()
+    assert not any("bad-print" in i for i in panel.validate()["issues"])
+    # inject a spike-and-reverse glitch
+    c = panel.close.copy()
+    c.iloc[200, 3] *= 1.9
+    from svyable.panel import Panel
+    bad = Panel(open=panel.open, high=panel.high.where(panel.high > c, c),
+                low=panel.low, close=c, volume=panel.volume)
+    assert any("bad-print" in i for i in bad.validate()["issues"])
+
+
 if __name__ == "__main__":
     test_golden_weights()
     test_causality_future_blindness()
     test_calendar()
     test_restatement_detection()
     test_ledger_roundtrip()
+    test_nw_tstat_corrects_overlap()
+    test_bad_print_detection()
     print("ALL REGRESSION TESTS PASSED")

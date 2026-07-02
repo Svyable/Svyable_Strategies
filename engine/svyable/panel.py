@@ -86,6 +86,16 @@ class Panel:
         neg = ((self.close <= 0) | (self.high < self.low)).sum().sum()
         if neg:
             issues.append(f"{int(neg)} impossible bars (close<=0 or high<low)")
+        # bad-print detection: a huge move immediately reversed is almost always
+        # a vendor glitch, not a trade — rank-IC is robust to it, but vol
+        # estimation and factor levels are not. Warn with symbols.
+        r = self.ret
+        spike = (r.abs() > 0.40) & ((r * r.shift(-1)) < -0.04)
+        n_bad = int(spike.sum().sum())
+        if n_bad:
+            syms = sorted(spike.any()[spike.any()].index[:8])
+            issues.append(f"{n_bad} suspect bad-print bars (±40% spike-and-reverse): "
+                          f"{', '.join(map(str, syms))}")
         return {
             "status": "ok" if not issues else "degraded",
             "issues": issues,
