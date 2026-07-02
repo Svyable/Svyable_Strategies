@@ -15,6 +15,7 @@ import pandas as pd
 
 from svyable.calendar import expected_last_close
 from svyable.config import nasdaq_lo_config
+from svyable.execution_quality import execution_summary, fetch_order_fills, score_fills
 from svyable.ledger import Ledger
 from svyable.rebalancer import PlannedOrder, plan_orders, reconcile
 from svyable.tastytrade_sdk import OrderIntent
@@ -179,6 +180,28 @@ class ExecutionControlMixin:
                     {**result, "symbol": order.symbol, "poll_error": str(exc)}
                 )
 
+        order_ids = [int(row["id"]) for row in submitted if row.get("id") is not None]
+        fills: list[dict[str, Any]] = []
+        quality: dict[str, Any]
+        try:
+            raw_fills = fetch_order_fills(
+                self.broker,
+                order_ids,
+                start_date=plan.get("execution_inputs_date") or str(date.today()),
+            )
+            fills = score_fills(raw_fills, [asdict(order) for order in orders])
+            quality = execution_summary(fills)
+        except Exception as exc:
+            quality = {
+                "fills": 0,
+                "notional": 0.0,
+                "fees": 0.0,
+                "mean_slippage_bps": None,
+                "mean_abs_slippage_bps": None,
+                "worst_slippage_bps": None,
+                "error": str(exc),
+            }
+
         account = self.broker.get_account()
         positions = self.broker.get_positions()
         fresh_prices = self.broker.execution_prices(
@@ -199,11 +222,15 @@ class ExecutionControlMixin:
                 for item in final_orders
             )
         ) else "degraded"
-        self._record_submission(plan, orders, final_orders, account, rec, status)
+        self._record_submission(
+            plan, orders, final_orders, fills, quality, account, rec, status
+        )
         return {
             "status": status,
             "submitted": len(submitted),
             "orders": final_orders,
+            "fills": fills,
+            "execution_quality": quality,
             "account": account,
             "positions": positions,
             "reconciliation": rec,
@@ -214,6 +241,8 @@ class ExecutionControlMixin:
         plan: dict[str, Any],
         orders: list[PlannedOrder],
         results: list[dict[str, Any]],
+        fills: list[dict[str, Any]],
+        quality: dict[str, Any],
         account: dict[str, Any],
         rec: dict[str, Any],
         status: str,
@@ -231,6 +260,7 @@ class ExecutionControlMixin:
                     "adv_capped_orders": plan.get("adv_capped_orders", 0),
                     "broker": "tastytrade-sdk",
                     "environment": self.settings.environment,
+                    "execution_quality": quality,
                     "reconciliation": rec,
                 },
             )
@@ -241,6 +271,8 @@ class ExecutionControlMixin:
                 [asdict(order) for order in orders],
                 results,
             )
+            if fills:
+                ledger.record_fills(run_id, "tastytrade-sdk", fills)
             ledger.record_equity(
                 plan.get("execution_inputs_date") or str(date.today()),
                 paper_equity=account["equity"],
@@ -250,8 +282,12 @@ class ExecutionControlMixin:
                 "info" if status == "ok" else "warning",
                 "streamlit",
                 f"Submitted {len(orders)} orders; status={status}; "
-                f"reconciliation={rec['status']}",
+                f"reconciliation={rec['status']}; fills={quality.get('fills', 0)}",
             )
+            if quality.get("error"):
+                ledger.record_event(
+                    "warning", "execution_quality", str(quality["error"])
+                )
             if rec["status"] != "ok":
                 ledger.record_event(
                     "warning", "reconcile", json.dumps(rec["drifts"], sort_keys=True)
