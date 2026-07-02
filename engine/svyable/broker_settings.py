@@ -1,6 +1,6 @@
 """Runtime settings for Tastytrade connectivity and dashboard safety.
 
-Secrets are loaded from the environment (optionally via ``engine/.env``).  The
+Secrets are loaded from the environment (optionally via ``engine/.env``). The
 new ``TASTY_*`` names are canonical; legacy ``TT_*`` aliases remain accepted so
 existing local automation does not break during migration.
 """
@@ -20,6 +20,12 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _as_float(value: str | None, default: float) -> float:
+    if value is None or not value.strip():
+        return default
+    return float(value)
+
+
 def _first_env(*names: str, default: str = "") -> str:
     for name in names:
         value = os.getenv(name)
@@ -36,6 +42,8 @@ class TastySettings:
     is_test: bool = True
     live_enabled: bool = False
     audit_path: Path = Path("outputs/audit/tastytrade.jsonl")
+    slippage_warn_bps: float = 15.0
+    slippage_critical_bps: float = 30.0
 
     @property
     def environment(self) -> str:
@@ -61,6 +69,12 @@ class TastySettings:
         audit_path = Path(
             os.getenv("SVYABLE_TASTY_AUDIT_PATH", f"{default_out}/audit/tastytrade.jsonl")
         )
+        warn_bps = _as_float(os.getenv("SVYABLE_SLIPPAGE_WARN_BPS"), 15.0)
+        critical_bps = _as_float(os.getenv("SVYABLE_SLIPPAGE_CRITICAL_BPS"), 30.0)
+        if warn_bps <= 0 or critical_bps <= 0 or critical_bps < warn_bps:
+            raise ValueError(
+                "Slippage thresholds must be positive and critical must be >= warning."
+            )
 
         missing = [
             name
@@ -83,4 +97,6 @@ class TastySettings:
             is_test=is_test,
             live_enabled=live_enabled,
             audit_path=audit_path,
+            slippage_warn_bps=warn_bps,
+            slippage_critical_bps=critical_bps,
         )
