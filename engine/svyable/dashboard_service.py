@@ -15,6 +15,7 @@ from typing import Any
 import pandas as pd
 
 from svyable.broker_settings import TastySettings
+from svyable.execution_backfill import ExecutionBackfillMixin
 from svyable.execution_control import ExecutionControlMixin
 from svyable.ledger import Ledger
 from svyable.tastytrade_sdk import OrderIntent, TastySdkBroker
@@ -22,7 +23,7 @@ from svyable.tastytrade_sdk import OrderIntent, TastySdkBroker
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
 
 
-class DashboardService(ExecutionControlMixin):
+class DashboardService(ExecutionBackfillMixin, ExecutionControlMixin):
     def __init__(
         self,
         *,
