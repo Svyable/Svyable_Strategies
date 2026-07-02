@@ -12,13 +12,25 @@ def render_overview(service: DashboardService) -> None:
     snapshot = service.ledger_snapshot()
     health = snapshot["health"]
     last_run = health.get("last_daily_run") or {}
-    cols = st.columns(6)
-    cols[0].metric("Last daily run", last_run.get("ts", "never"))
-    cols[1].metric("Run status", last_run.get("status", "—"))
-    cols[2].metric("Tracking days", health.get("tracking_days", 0))
-    cols[3].metric("Mean |drift|", f"{health.get('drift_bps_mean_abs', '—')} bps")
-    cols[4].metric("Warnings 7d", health.get("warnings_7d", 0))
-    cols[5].metric("Critical 7d", health.get("critical_7d", 0))
+
+    first = st.columns(6)
+    first[0].metric("Last daily run", last_run.get("ts", "never"))
+    first[1].metric("Run status", last_run.get("status", "—"))
+    first[2].metric("Tracking days", health.get("tracking_days", 0))
+    first[3].metric("Mean |drift|", f"{health.get('drift_bps_mean_abs', '—')} bps")
+    first[4].metric("Warnings 7d", health.get("warnings_7d", 0))
+    first[5].metric("Critical 7d", health.get("critical_7d", 0))
+
+    second = st.columns(3)
+    second[0].metric("Recorded fills", health.get("fills", 0))
+    second[1].metric(
+        "Mean |slippage|",
+        f"{health.get('slippage_bps_mean_abs', '—')} bps",
+    )
+    second[2].metric(
+        "Worst |slippage|",
+        f"{health.get('slippage_bps_worst', '—')} bps",
+    )
 
     equity = snapshot["equity"].copy()
     if not equity.empty:
