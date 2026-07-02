@@ -1,34 +1,188 @@
-# Svyable_Strategies
+# Svyable Strategies
 
-Vendor-agnostic quantitative strategy operation, distilled from the Q23 research harness (`~/Q23_QUANT_SYSTEM 2`). Goal: run a systematic book on a daily loop against any data provider and any broker.
+Svyable Strategies is the canonical home for converting the best ideas from [`Svyable/Q23_QUANT_SYSTEM_2`](https://github.com/Svyable/Q23_QUANT_SYSTEM_2) into a vendor-agnostic, broker-connected systematic trading operation.
 
-## Documents
+The project’s north star is simple:
 
-- **[strategy.md](strategy.md)** — the alpha specification. What to compute: factor library (~70 factors across defensive / momentum / OU mean-reversion / microstructure / behavioral families), the IC meta-learning weighting scheme, the four-sleeve ensemble with stress prior, portfolio construction, the risk stack, PM tooling requirements, fixes over the Q23 implementations, the **contest-constraint unlock analysis (§11)**, and the **`svyable_nasdaq_lo` long-only NASDAQ flagship spec (§12)**.
-- **[plan.md](plan.md)** — the platform architecture. How to plug it in: `DataProvider` / `BrokerConnector` protocols, vendor landscape (Quantiacs, Marketstack, Daloopa, Quiver; Alpaca, tastytrade, Schwab, IBKR), secrets/token management, and the phased migration from research harness to live execution.
-- **[roadmap.md](roadmap.md)** — the operation. Five phases from generic `svyable-engine` package → paper loop → live pilot with a staged unlock schedule → scale/second book → company formation, plus the standing research agenda and operating principles.
-- **[engine/](engine/README.md)** — the working codebase (Phase 1, built). Panel → factor registry → purged IC meta-learner → sleeve ensemble (+ ML sleeve) → construction → risk stack → morning report. Verified end-to-end on real NASDAQ data; full 6.5y backtest ≈ 5 seconds.
-- **[ops/](ops/CLAUDE_LOOP.md)** — the daily loop: launchd job at 07:30 ET produces weights + `engine/outputs/svyable_nasdaq_lo/LATEST.md` before the 08:30 deadline; a scheduled Claude session reviews, escalates, and journals. Deterministic code computes; Claude supervises.
-- **[production.md](production.md)** — the operational chassis: accuracy (restatement detection, trading calendar, Massive/Polygon provider, PIT universe), consistency (golden-weights + causality regression tests, lockfile), observability (SQLite run ledger, `svyable health`, external dead-man heartbeat, shadow-vs-live drift), and the three hard gates to live capital.
-
-Reference proof point: q23_neural_alpha, 2025 under full contest constraints — 63.58% annual, Sharpe 3.545, MaxDD −5.67%, 58.02% net of contest-model costs.
-
-## Operating model (one line)
-
-```
-Panel(OHLCV) → factors → IC-weighted sleeves → composite score → seats/tilt/projection → vol-target budget × dd throttle × overlay → target weights → rebalancer diff → broker orders → reconcile
+```text
+Q23 research alpha -> Svyable engine -> Tastytrade paper loop -> production-gated live operation
 ```
 
-Steps through target weights exist in Q23 today; the rebalancer and broker adapters are the build (plan.md Phases 0–5).
+Q23 is the predecessor research harness. It proved the core ideas: factor libraries, IC-weighted alpha, ensemble sleeves, portfolio construction, cost-aware diagnostics, and PM review artifacts. Svyable Strategies is the conversion layer: it keeps the useful research logic, removes Quantiacs-only assumptions, adds execution plumbing, and turns daily target weights into broker-ready orders.
 
-## Iteration workflow (sandbox → prod)
+## Current truth
 
-- **Environments are fully isolated**: `--env sandbox` (default) vs `--env production` give separate data caches, outputs, and ledgers (`outputs-production/`, `data-cache-production/`); `SVYABLE_ENV` sets the default. PROD's record can never be contaminated by a dev run.
-- **Morning orchestration (8:00 ET)**: `svyable session` — validates OAuth (never-expiring grant → 15-min access tokens auto-refresh all day), mints the 24h DXLink quote token, snapshots the universe. Then the 07:30 launchd daily run + `svyable dashboard` (self-contained HTML at `engine/outputs/dashboard.html`, regenerated every run).
-- **Change discipline**: work on a branch; `tests/golden_weights.json` is the behavior contract — any weight-changing edit fails tests until you deliberately re-bless it in the same commit; walk-forward report accompanies any parameter change; merge to main = what PROD runs. Compare envs with `svyable --env sandbox health` vs `svyable --env production health`.
+Svyable Strategies is **paper-operational research infrastructure**, not a live-capital system yet.
+
+What exists today:
+
+- A working `engine/` package for daily alpha generation.
+- A canonical panel model for OHLCV data.
+- A flat factor registry with the currently implemented subset of the broader Q23 strategy ideas.
+- Purged IC weighting with causal shifts and recency weighting.
+- Sleeve ensemble construction, optional ML sleeve, risk stack, construction logic, and morning reports.
+- Broker abstractions plus local paper execution and Tastytrade integration work.
+- Sandbox and production environment separation for outputs, caches, and ledgers.
+- Golden-weight and causality-oriented testing discipline.
+
+What is not true yet:
+
+- It is not trading live capital.
+- It does not yet have production-grade point-in-time NASDAQ universe data wired as the default live record.
+- Performance claims are not live results.
+- Current seed-universe backtests are engineering validation unless explicitly labeled otherwise.
+- Tastytrade execution must remain dry-run or paper-gated until the production gates below are passed.
+
+## Canonical architecture
+
+```text
+DataProvider
+  ↓
+Panel(time x asset OHLCV)
+  ↓
+Factor registry
+  ↓
+Purged IC meta-learner
+  ↓
+Sleeve ensemble
+  ↓
+Composite score
+  ↓
+Seat selection / tilt / projection
+  ↓
+Risk stack: vol target x drawdown throttle x overlays
+  ↓
+Target weights
+  ↓
+Rebalancer diff
+  ↓
+BrokerConnector
+  ↓
+Tastytrade orders / fills / reconciliation
+  ↓
+Ledger + morning report + human PM review
+```
+
+The invariant: strategy math should not care which vendor supplied the data or which broker receives the order. Vendors belong behind adapters. The research logic belongs in the engine.
+
+## Relationship to Q23
+
+`Q23_QUANT_SYSTEM_2` is the research source of truth for the best alpha ideas. It is valuable because it contains a mature Quantiacs-oriented research harness and the strategy concepts we want to preserve.
+
+Svyable Strategies exists to convert those ideas into a real operating system:
+
+| Layer | Q23 role | Svyable Strategies role |
+|---|---|---|
+| Research alpha | Source of best ideas and proofs | Preserve, simplify, and port the ideas |
+| Data | Quantiacs-centered, contest/research oriented | Vendor-agnostic `DataProvider` model |
+| Factors | Broad experimental library | Implemented, testable, promotable registry |
+| Weighting | IC/meta-learning research logic | Causal production-shaped implementation |
+| Portfolio | Contest/research portfolio construction | Broker-ready target weights |
+| Execution | No real broker loop | Tastytrade-oriented broker connector and rebalancer |
+| Review | CSV/dashboard artifacts | Morning report, ledger, health, reconciliation |
+
+The immediate conversion target is **Tastytrade**: convert daily alpha targets into safe, auditable, dry-run-first order plans, then paper execution, then gated live execution.
+
+## Capability status
+
+| Capability | Status | Canonical note |
+|---|---:|---|
+| Q23 strategy ideas | Proven research source | Preserve the best concepts, not every implementation detail |
+| Vendor-agnostic engine | Implemented | `engine/` is the active codebase |
+| OHLCV panel model | Implemented | Current engine normalizes daily market data into a panel |
+| Factor library | Partially implemented | Broader Q23 spec is larger than the implemented engine subset |
+| IC meta-learning | Implemented | Must remain purged/causal; no look-ahead shortcuts |
+| Sleeve ensemble | Implemented | Includes defensive/momentum/mean-reversion/microstructure families and optional ML sleeve |
+| Portfolio construction | Implemented | Converts scores into target weights with caps, smoothing, and no-trade logic |
+| Risk stack | Implemented | Vol targeting, drawdown throttle, overlays, kill-switch concepts |
+| Local paper broker | Implemented | Offline safety harness for order lifecycle testing |
+| Tastytrade connector | In progress / gated | Integration path exists, but production submission stays gated |
+| Rebalancer | Implemented / validating | Converts target weights to share orders with audit trail and reconciliation |
+| PIT universe | Production gate | Required before quoting strategy results as production-quality |
+| Live capital | Not active | Requires all gates below |
+
+## Production gates
+
+No live-capital trading until all three gates pass.
+
+### Gate 1 - Data correctness
+
+- Point-in-time universe data is wired into the daily path.
+- Staleness checks understand market holidays and provider lag.
+- Restatements or vendor changes are detected and logged.
+- Every reported backtest labels its universe, data source, date range, and survivorship-bias status.
+
+### Gate 2 - Strategy reproducibility
+
+- Golden weights protect behavior-changing edits.
+- Causality tests prevent future leakage.
+- Walk-forward reports accompany parameter changes.
+- Any factor promotion is justified by IC/IR, hit rate, stability, and OOS behavior.
+
+### Gate 3 - Execution safety
+
+- Tastytrade authentication and token refresh are reliable.
+- Order generation is dry-run-first and auditable.
+- Pre-trade checks enforce leverage, cash, ADV participation, and position limits.
+- Reconciliation compares intended, submitted, filled, and actual broker positions.
+- Shadow-vs-live drift is visible before capital is at risk.
+
+## Operating loop
+
+The intended daily loop is:
+
+1. **Session/bootstrap** - validate credentials, refresh broker/data tokens, snapshot account and universe state.
+2. **Daily compute** - build the panel, compute factors, produce target weights, create the morning report.
+3. **Human PM review** - inspect weights, risk, drift, unusual factor behavior, and proposed orders.
+4. **Dry-run order plan** - generate broker-ready orders without submitting by default.
+5. **Paper execution** - submit only in paper/sandbox mode while validating fills and reconciliation.
+6. **Production execution** - allowed only after all production gates are satisfied.
+
+Timing labels should always distinguish **bootstrap**, **daily compute**, **review**, and **broker deadline**. Avoid mixing clock times without saying which step they refer to.
+
+## Repository map
+
+```text
+README.md              canonical project narrative and status
+strategy.md            target alpha specification and Q23 idea map
+plan.md                architecture and migration rationale
+roadmap.md             remaining build sequence and research agenda
+production.md          production-readiness gates and operating controls
+engine/                active Svyable engine implementation
+engine/README.md       package-level usage and implementation details
+ops/CLAUDE_LOOP.md     daily review/supervision loop
+```
+
+This README is the canonical status document. Other documents may contain deeper detail, historical rationale, or aspirational specifications, but this file wins when documents disagree.
+
+## Performance language
+
+Use precise labels:
+
+- **Q23 research result** - came from the predecessor research harness.
+- **Svyable engineering validation** - verifies the engine works, but may use biased or incomplete data.
+- **Paper result** - came from broker/paper execution or simulated fills.
+- **Live result** - came from real capital. None are claimed here yet.
+
+Reference proof point from Q23: `q23_neural_alpha`, 2025 under full contest constraints - 63.58% annual, Sharpe 3.545, MaxDD -5.67%, 58.02% net of contest-model costs.
+
+That number motivates the conversion effort. It is not a live Svyable Strategies result.
+
+Current engine validation snapshot from the existing docs: full 6.5-year x 128-asset pipeline runs in roughly five seconds on a MacBook-class machine; the walk-forward fragility scan was marked robust on the tested real-data snapshot; seed-universe backtests remain survivorship-biased unless PIT universe data is explicitly used.
+
+## Development discipline
+
+- Strategies are configs where possible, not forks.
+- All vendor details live behind adapters.
+- Default mode is sandbox/paper/dry-run.
+- Main branch represents the production-intended record.
+- Any weight-changing code edit must either preserve golden weights or deliberately re-bless them with a clear reason.
+- No result should be quoted without its data source, date range, universe definition, and execution status.
 
 ## Next actions
 
-1. Phase 0 (plan.md): extract `DataProvider` interface from Q23's `data_loader.py` — behavior-preserving, verified by byte-identical backtest CSVs.
-2. Stand up `svyable_core` per strategy.md §5 with the §8 fixes (causal recency boost, purged IC shift, flat factor registry).
-3. Alpaca paper-trading adapter + rebalancer for the first end-to-end loop.
+1. Finish the Tastytrade paper loop: auth, order preview, submit/cancel/status, fills, reconciliation, and ledger evidence.
+2. Wire point-in-time NASDAQ universe data into the default production path.
+3. Promote Q23 ideas into the engine one family at a time, using IC tearsheets and walk-forward reports as promotion gates.
+4. Harden observability: health checks, run ledger, shadow-vs-live drift, dead-man heartbeat, and failure escalation.
+5. Run the full system in paper mode long enough to establish stable daily operations before enabling any live-capital path.
