@@ -49,5 +49,8 @@ jobs:
       - name: Dashboard ADV regression
         run: python tests/test_dashboard_adv_plan.py
 
+      - name: Fill quality regression
+        run: python tests/test_execution_quality.py
+
       - name: Core synthetic smoke
         run: python -m svyable.cli --out /tmp/svyable-ci smoke
