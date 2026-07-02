@@ -1,18 +1,55 @@
-"""Order ledger and append-only broker audit view."""
+"""Order, fill-quality, event, and append-only broker audit view."""
 
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from svyable.dashboard_service import DashboardService
+from svyable.ledger import Ledger
 
 
 def render_audit(service: DashboardService) -> None:
     snapshot = service.ledger_snapshot()
+
     st.subheader("Ledger orders")
     st.dataframe(snapshot["orders"], use_container_width=True, hide_index=True)
+
+    ledger = Ledger(service.ledger_path)
+    try:
+        fills = ledger.execution_quality_frame(500)
+    finally:
+        ledger.close()
+
+    st.subheader("Execution quality")
+    if fills.empty:
+        st.info("No broker fill transactions have been recorded yet.")
+    else:
+        scored = fills["slippage_bps"].dropna().astype(float)
+        cols = st.columns(4)
+        cols[0].metric("Fills", len(fills))
+        cols[1].metric(
+            "Notional",
+            f"${(fills['qty'].fillna(0) * fills['fill_price'].fillna(0)).sum():,.2f}",
+        )
+        cols[2].metric(
+            "Mean |slippage|",
+            f"{scored.abs().mean():.2f} bps" if len(scored) else "—",
+        )
+        cols[3].metric(
+            "Fees",
+            f"${fills['fees'].fillna(0).sum():,.4f}",
+        )
+        st.dataframe(fills, use_container_width=True, hide_index=True)
+        if len(scored):
+            chart = fills.dropna(subset=["slippage_bps"]).copy()
+            chart["ts"] = pd.to_datetime(chart["ts"])
+            chart = chart.sort_values("ts").set_index("ts")
+            st.line_chart(chart[["slippage_bps"]])
+
     st.subheader("Operational events")
     st.dataframe(snapshot["events"], use_container_width=True, hide_index=True)
+
     st.subheader("Append-only Tastytrade audit")
     audit = service.audit_tail(200)
     if audit.empty:
