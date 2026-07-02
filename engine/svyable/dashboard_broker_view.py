@@ -8,6 +8,7 @@ import streamlit as st
 from svyable.broker_settings import TastySettings
 from svyable.dashboard_service import DashboardService
 from svyable.dashboard_ui import cancellation_confirmation, money
+from svyable.sandbox_check import run_sandbox_check
 
 
 def render_broker(service: DashboardService, settings: TastySettings) -> None:
@@ -26,6 +27,24 @@ def render_broker(service: DashboardService, settings: TastySettings) -> None:
     cols[2].metric("Net liq", money(account.get("equity")))
     cols[3].metric("Cash", money(account.get("cash")))
     cols[4].metric("Maintenance excess", money(account.get("maintenance_excess")))
+
+    st.subheader("Sandbox connectivity check")
+    st.caption(
+        "Validates the session, account, positions, quote path, and a one-share broker "
+        "dry run. It never submits an order and refuses production credentials."
+    )
+    if not settings.is_test:
+        st.info("Disabled because the configured session is not a sandbox session.")
+    elif st.button("Run non-submitting sandbox check"):
+        try:
+            check = run_sandbox_check(service.broker)
+            if check["status"] == "PASS":
+                st.success("Sandbox connectivity and broker preflight passed.")
+            else:
+                st.warning("Sandbox check returned a blocked result.")
+            st.json(check)
+        except Exception as exc:
+            st.error(str(exc))
 
     st.subheader("Positions")
     positions = snapshot["positions"]
