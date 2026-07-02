@@ -1,0 +1,188 @@
+"""Portfolio construction (strategy.md §12.3, §13).
+
+Per day, causally: smooth score -> dispersion-adaptive seat selection ->
+softmax conviction tilt (or HRP) -> capped-simplex projection ->
+EWMA smoothing vs yesterday -> L1 no-trade band.
+Output: unit weights (sum = 1 per day); the risk budget scales them later.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+
+from svyable.panel import EPS
+from svyable.config import SvyableConfig
+
+
+def project_capped_simplex(v: np.ndarray, total: float,
+                           lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
+    """Euclidean projection of v onto {lo <= x <= hi, sum(x) = total}.
+
+    Bisection on the uniform shift tau: x = clip(v + tau, lo, hi).
+    Requires sum(lo) <= total <= sum(hi); degrades to closest bound otherwise.
+    """
+    if hi.sum() < total:            # infeasible: give everything its cap
+        return hi.copy()
+    if lo.sum() > total:            # infeasible: floor everything
+        return lo.copy()
+    t_lo = float((lo - v).min()) - 1.0
+    t_hi = float((hi - v).max()) + 1.0
+    for _ in range(64):
+        tau = 0.5 * (t_lo + t_hi)
+        s = np.clip(v + tau, lo, hi).sum()
+        if s < total:
+            t_lo = tau
+        else:
+            t_hi = tau
+    return np.clip(v + 0.5 * (t_lo + t_hi), lo, hi)
+
+
+def softmax_tilt(base: np.ndarray, scores: np.ndarray, sel: np.ndarray,
+                 alpha: float) -> np.ndarray:
+    """Blend base weights toward softmax(conviction) on the selected set."""
+    out = base.copy()
+    s = scores[sel]
+    if s.size < 2 or alpha <= 0:
+        return out
+    z = (s - s.mean()) / (s.std() + EPS)
+    sm = np.exp(z - z.max())
+    sm /= sm.sum() + EPS
+    mass = base[sel].sum()
+    out[sel] = ((1.0 - alpha) * base[sel] + alpha * sm * mass)
+    out[sel] *= mass / (out[sel].sum() + EPS)
+    return out
+
+
+def _hrp_weights(ret_win: np.ndarray) -> np.ndarray | None:
+    """Hierarchical Risk Parity on the selected seats (López de Prado).
+
+    ret_win: (T, k) recent returns of selected assets. Returns k weights or
+    None if scipy unavailable / data insufficient.
+    """
+    try:
+        from scipy.cluster.hierarchy import linkage, leaves_list
+        from scipy.spatial.distance import squareform
+    except ImportError:
+        return None
+    if ret_win.shape[0] < 40 or ret_win.shape[1] < 3:
+        return None
+    R = np.nan_to_num(ret_win)
+    C = np.corrcoef(R.T)
+    C = np.clip(C, -1, 1)
+    D = np.sqrt(0.5 * (1 - C))
+    np.fill_diagonal(D, 0.0)
+    order = leaves_list(linkage(squareform(D, checks=False), method="single"))
+    var = R.var(axis=0) + EPS
+
+    w = np.ones(len(order))
+    clusters = [list(order)]
+    while clusters:
+        nxt = []
+        for cl in clusters:
+            if len(cl) <= 1:
+                continue
+            mid = len(cl) // 2
+            a, b = cl[:mid], cl[mid:]
+            va = 1.0 / np.sum(1.0 / var[a])
+            vb = 1.0 / np.sum(1.0 / var[b])
+            alloc_a = 1.0 - va / (va + vb)
+            w[a] *= alloc_a
+            w[b] *= (1.0 - alloc_a)
+            nxt += [a, b]
+        clusters = nxt
+    return w / (w.sum() + EPS)
+
+
+@dataclass
+class ConstructResult:
+    unit_weights: pd.DataFrame
+    seats: pd.Series           # seat count per day
+    turnover: pd.Series        # L1 turnover of unit weights
+    held_days: pd.Series       # 1.0 when the no-trade band held the book
+
+
+def build_unit_weights(score: pd.DataFrame, returns: pd.DataFrame,
+                       liquidity: pd.DataFrame, cfg: SvyableConfig) -> ConstructResult:
+    S = score.rolling(cfg.score_smooth_win, min_periods=1).mean()
+    S = S.where(liquidity > 0)
+
+    dates, assets = S.index, S.columns
+    n = len(assets)
+    Sv = S.to_numpy(dtype=float)
+    Rv = returns.to_numpy(dtype=float)
+
+    # dispersion z for adaptive seats (causal: expanding stats)
+    disp = S.std(axis=1)
+    dz = ((disp - disp.expanding(min_periods=63).mean())
+          / (disp.expanding(min_periods=63).std() + EPS)).fillna(0.0).to_numpy()
+
+    W = np.zeros((len(dates), n))
+    seats = np.zeros(len(dates), dtype=int)
+    turnover = np.zeros(len(dates))
+    held = np.zeros(len(dates))
+    prev = np.zeros(n)
+
+    use_hrp = cfg.seat_weighting in ("hrp", "blend")
+
+    for t in range(len(dates)):
+        s = Sv[t]
+        valid = np.isfinite(s)
+        if valid.sum() < cfg.seats_min:
+            W[t] = prev
+            seats[t] = int((prev > 0).sum())
+            continue
+
+        k = cfg.seats_base
+        if cfg.seats_adaptive:
+            k = int(np.clip(round(cfg.seats_base - cfg.seats_disp_slope * dz[t]),
+                            cfg.seats_min, cfg.seats_max))
+        k = min(k, int(valid.sum()))
+
+        order = np.argsort(np.where(valid, -s, np.inf))
+        sel_idx = order[:k]
+        sel = np.zeros(n, dtype=bool)
+        sel[sel_idx] = True
+
+        # base weights: score-proportional (shifted positive)
+        ss = s[sel]
+        ss = ss - ss.min() + 1e-6
+        base = np.zeros(n)
+        base[sel] = ss / (ss.sum() + EPS)
+
+        if use_hrp and t >= 63:
+            hw = _hrp_weights(Rv[max(0, t - 126):t, sel_idx])
+            if hw is not None:
+                hrp_full = np.zeros(n)
+                hrp_full[sel_idx] = hw
+                base = (0.5 * base + 0.5 * hrp_full) if cfg.seat_weighting == "blend" else hrp_full
+
+        tilted = softmax_tilt(base, s, sel, cfg.softmax_tilt_alpha)
+
+        lo = np.where(sel, cfg.min_pos, 0.0)
+        hi = np.where(sel, cfg.max_pos, 0.0)
+        target = project_capped_simplex(tilted, 1.0, lo, hi)
+
+        if t > 0:
+            l1 = np.abs(target - prev).sum()
+            if l1 < cfg.no_trade_band:
+                # hold, but stay feasible under today's selection
+                target = project_capped_simplex(prev, 1.0, lo, hi) if prev.sum() > 0 else target
+                held[t] = 1.0
+            else:
+                sm = cfg.weight_smooth_alpha * target + (1 - cfg.weight_smooth_alpha) * prev
+                target = project_capped_simplex(sm, 1.0, lo, hi)
+
+        turnover[t] = np.abs(target - prev).sum()
+        W[t] = target
+        prev = target
+        seats[t] = k
+
+    return ConstructResult(
+        unit_weights=pd.DataFrame(W, index=dates, columns=assets),
+        seats=pd.Series(seats, index=dates),
+        turnover=pd.Series(turnover, index=dates),
+        held_days=pd.Series(held, index=dates),
+    )

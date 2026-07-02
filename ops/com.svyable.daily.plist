@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Svyable daily weights job — weekdays 07:30 (machine local time).
+  launchd has no timezone support: the Hour below assumes the Mac is set to
+  America/New_York. If not, adjust Hour so the run lands 07:00-07:45 ET.
+  launchd also runs missed jobs on wake if the lid was closed at 07:30.
+
+  Install:
+    cp ops/com.svyable.daily.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.svyable.daily.plist
+  Verify:
+    launchctl list | grep svyable
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.svyable.daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>$HOME/Svyable_Strategies/ops/run_daily.sh</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/com.svyable.daily.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/com.svyable.daily.err</string>
+
+  <key>ProcessType</key>
+  <string>Standard</string>
+</dict>
+</plist>

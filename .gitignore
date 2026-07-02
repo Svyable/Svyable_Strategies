@@ -1,0 +1,22 @@
+# --- never commit market data, run artifacts, or state (env-specific, large, regenerable)
+engine/data-cache*/
+engine/outputs*/
+engine/logs/
+engine/.venv/
+engine/paper_account.json
+journal/
+
+# --- never commit secrets
+.env
+*.env
+**/quote_token.json
+
+# --- python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- committed on purpose (do NOT ignore):
+# engine/tests/golden_weights.json   (the behavior contract)
+# engine/requirements.lock           (reproducibility)
+# engine/universe_nasdaq_seed.txt
