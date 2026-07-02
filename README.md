@@ -24,7 +24,8 @@ Implemented today:
 - Persisted execution inputs: closing prices, dollar ADV, and the liquidity mask.
 - Local paper broker, rebalancer, reconciliation, SQLite ledger, and health reporting.
 - Tastytrade connectivity for account state, quotes, broker preflight, order lifecycle, and audit evidence.
-- Streamlit operations console for strategy, broker, rebalance, order supervision, reconciliation, and audit.
+- Tastytrade trade-history normalization with fill prices, fees, venues, and signed slippage.
+- Streamlit operations console for strategy, broker, rebalance, order supervision, reconciliation, execution quality, and audit.
 - Fully isolated sandbox and production output roots.
 
 Not true yet:
@@ -51,8 +52,9 @@ DataProvider
   -> Rebalancer diff and ADV participation cap
   -> Broker preflight
   -> Tastytrade sandbox execution
-  -> Order polling and reconciliation
-  -> Ledger + dashboard + human PM review
+  -> Order polling and trade-history capture
+  -> Fill slippage / fees / venue evidence
+  -> Reconciliation + ledger + dashboard + human PM review
 ```
 
 The invariant is that strategy math does not care which vendor supplied the data or which broker receives an order. Vendor and broker details stay behind adapters.
@@ -66,8 +68,8 @@ The invariant is that strategy math does not care which vendor supplied the data
 | Factors | Broad experimental library | Flat, testable, promotable registry |
 | Weighting | IC/meta-learning research logic | Purged and causal production-shaped implementation |
 | Portfolio | Contest/research portfolio construction | Broker-ready target weights |
-| Execution | Stops at artifacts | Rebalancer, broker preflight, sandbox execution, polling, reconciliation |
-| Review | CSV/dashboard research artifacts | Morning report, ledger, Streamlit console, health and drift |
+| Execution | Stops at artifacts | Rebalancer, preflight, sandbox execution, fills, slippage, reconciliation |
+| Review | CSV/dashboard research artifacts | Morning report, ledger, Streamlit console, health, drift, execution quality |
 
 The immediate conversion target is Tastytrade: translate Q23-derived daily alpha targets into safe, reviewable, sandbox-first order plans.
 
@@ -84,7 +86,8 @@ The immediate conversion target is Tastytrade: translate Q23-derived daily alpha
 | Execution-input artifact | Implemented | Daily price, dollar ADV, and liquidity state travel with each run |
 | Tastytrade SDK adapter | Implemented / gated | Typed community SDK path for dashboard and order workflow |
 | Legacy Tastytrade REST adapter | Retained | Supports existing DXLink, universe, and CLI integration during migration |
-| Streamlit console | Implemented | Observability, quotes, ADV-aware plans, preflight, sandbox execution, polling, cancellation, reconciliation, audit |
+| Fill-quality ledger | Implemented | Transaction ID, broker order, quantity, price, reference, slippage, fees, and venue |
+| Streamlit console | Implemented | Observability, ADV-aware plans, preflight, sandbox execution, polling, cancellation, reconciliation, fill quality, audit |
 | Production Streamlit rebalance | Disabled | Requires completed gates and a sustained sandbox operating record |
 | CLI rebalancer | Implemented / validating | Reference automation path while the dashboard operating record develops |
 | PIT universe | Accumulating / gate | Live snapshots are honest from collection start; deep history remains incomplete |
@@ -140,11 +143,11 @@ The server binds to `127.0.0.1:8501` by default. Override with `SVYABLE_STREAMLI
 
 ### Dashboard surfaces
 
-- **Overview** — run health, warnings, shadow NAV, paper equity, and tracking drift.
+- **Overview** — run health, warnings, shadow NAV, paper equity, tracking drift, fill count, and slippage health.
 - **Strategy** — latest targets, gross budget, sleeve trust, IC health, factor weights, metadata, and morning report.
 - **Broker** — masked account identity, balances, positions, same-day orders, order-status lookup, guarded cancellation, reconciliation, and quotes.
-- **Rebalance** — target-vs-position plan using persisted ADV/liquidity state, live quote validation, broker preflight, sandbox submission, polling, and post-order reconciliation.
-- **Audit** — SQLite order ledger, operational events, and append-only Tastytrade intent/preflight/response records.
+- **Rebalance** — target-vs-position plan using persisted ADV/liquidity state, live quote validation, broker preflight, sandbox submission, polling, transaction capture, and post-order reconciliation.
+- **Audit** — order ledger, fill-level slippage and fees, operational events, and append-only Tastytrade intent/preflight/response records.
 
 ### Dashboard safety invariants
 
@@ -155,7 +158,10 @@ The server binds to `127.0.0.1:8501` by default. Override with `SVYABLE_STREAMLI
 - Every order is broker-preflighted before submission.
 - Any broker warning or error blocks submission.
 - Submitted sandbox orders are polled and followed by broker-vs-target reconciliation.
-- Intent, preflight, response, and cancellation events are appended to a JSONL audit log.
+- Fill capture is linked by broker order ID and scored against the plan reference price.
+- Positive slippage means worse execution for both buys and sells.
+- Fill-capture failures are logged as operational warnings rather than silently discarded.
+- Intent, preflight, response, cancellation, and fill evidence are persisted locally.
 - Account numbers are masked in read-only dashboard views.
 - Sandbox submission and cancellation require acknowledgement and typed confirmation phrases.
 - Production cancellation requires the configured account number.
@@ -169,7 +175,7 @@ Two adapters coexist during migration:
 - `svyable/tastytrade.py` — the existing low-level REST path used by DXLink candles, universe snapshots, and current CLI workflows.
 - `svyable/tastytrade_sdk.py` — the typed community SDK path used by the Streamlit dashboard and its broker-preflight workflow.
 
-This is deliberate. It avoids destabilizing the working data/universe path while the SDK adapter is validated. Consolidation should happen only after parity tests cover authentication, quotes, accounts, positions, orders, universe snapshots, and DXLink token behavior.
+This is deliberate. It avoids destabilizing the working data/universe path while the SDK adapter is validated. Consolidation should happen only after parity tests cover authentication, quotes, accounts, positions, orders, transactions, universe snapshots, and DXLink token behavior.
 
 ## Production gates
 
@@ -194,6 +200,7 @@ No live-capital operation until all three gates pass.
 - Tastytrade authentication and token refresh are reliable.
 - Pre-trade checks enforce leverage, cash, ADV participation, and position limits.
 - Intended, preflighted, submitted, filled, and actual positions reconcile.
+- Fill slippage, fees, and venue data are observable and reviewed.
 - Shadow-vs-paper drift is visible and within an accepted operating band.
 - Failure escalation and a dead-man heartbeat are operational.
 - A sustained sandbox record demonstrates repeatable daily operation.
@@ -204,7 +211,7 @@ No live-capital operation until all three gates pass.
 2. **Daily compute** — build the panel and emit targets plus price/ADV/liquidity evidence.
 3. **PM review** — inspect data health, risk, drift, factors, targets, and proposed orders.
 4. **Broker preflight** — estimate buying-power and fee effects; block on warnings/errors.
-5. **Sandbox execution** — submit, poll, record account equity, and reconcile.
+5. **Sandbox execution** — submit, poll, capture fills, score slippage, record account equity, and reconcile.
 6. **Production operation** — unavailable until every gate passes.
 
 ## Performance language
@@ -228,21 +235,22 @@ Reference Q23 proof point: `q23_neural_alpha`, 2025 under full contest constrain
 ## Repository map
 
 ```text
-README.md                         canonical narrative, setup, status, and gates
-engine/svyable/                   active strategy and operations implementation
-engine/svyable/streamlit_app.py   dashboard composition
-engine/svyable/dashboard_*.py     dashboard services and views
+README.md                          canonical narrative, setup, status, and gates
+engine/svyable/                    active strategy and operations implementation
+engine/svyable/streamlit_app.py    dashboard composition
+engine/svyable/dashboard_*.py      dashboard services and views
 engine/svyable/execution_control.py ADV-aware planning, polling, reconciliation
-engine/svyable/tastytrade_sdk.py  typed community-SDK broker adapter
-engine/svyable/tastytrade.py      retained REST/DXLink-compatible adapter
-engine/tests/                     offline and regression tests
-ops/CLAUDE_LOOP.md                scheduled review/supervision loop
+engine/svyable/execution_quality.py fill normalization and signed slippage
+engine/svyable/tastytrade_sdk.py   typed community-SDK broker adapter
+engine/svyable/tastytrade.py       retained REST/DXLink-compatible adapter
+engine/tests/                      offline and regression tests
+ops/CLAUDE_LOOP.md                 scheduled review/supervision loop
 ```
 
 ## Next actions
 
-1. Add sandbox integration tests with real Tastytrade credentials in a secret-managed manual environment.
-2. Add transaction/fill detail capture and compare executed prices against preflight marks.
-3. Build daily execution-quality and slippage reporting in the ledger/dashboard.
+1. Run a secret-managed sandbox integration test against the configured account.
+2. Add retry/backfill logic for transaction history that appears after the initial poll window.
+3. Add explicit slippage budgets and escalation thresholds by order size/liquidity bucket.
 4. Accumulate point-in-time universe snapshots and source historical membership data.
 5. Establish a sustained paper operating record before considering any live-capital path.
