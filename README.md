@@ -21,16 +21,17 @@ Implemented today:
 - Implemented subset of the broader Q23 factor library.
 - Purged, causal IC weighting and sleeve meta-learning.
 - Portfolio construction, risk budgeting, turnover controls, and morning artifacts.
+- Persisted execution inputs: closing prices, dollar ADV, and the liquidity mask.
 - Local paper broker, rebalancer, reconciliation, SQLite ledger, and health reporting.
 - Tastytrade connectivity for account state, quotes, broker preflight, order lifecycle, and audit evidence.
-- Streamlit operations console for strategy, broker, rebalance, and audit supervision.
+- Streamlit operations console for strategy, broker, rebalance, order supervision, reconciliation, and audit.
 - Fully isolated sandbox and production output roots.
 
 Not true yet:
 
 - No live-capital performance is claimed.
 - Production bulk submission from Streamlit is disabled.
-- The Streamlit planner does not yet load the daily ADV panel; the CLI rebalancer remains the ADV-capped reference path.
+- A sustained sandbox operating record has not yet been established.
 - Deep-history seed-universe backtests remain survivorship-biased unless explicitly labeled as point-in-time.
 - Live operation remains blocked until every production gate below passes.
 
@@ -46,10 +47,12 @@ DataProvider
   -> Seat selection / tilt / projection
   -> Risk stack
   -> Target weights
-  -> Rebalancer diff
+  -> Persisted execution inputs (price / ADV / liquidity)
+  -> Rebalancer diff and ADV participation cap
   -> Broker preflight
   -> Tastytrade sandbox execution
-  -> Reconciliation + ledger + dashboard + human PM review
+  -> Order polling and reconciliation
+  -> Ledger + dashboard + human PM review
 ```
 
 The invariant is that strategy math does not care which vendor supplied the data or which broker receives an order. Vendor and broker details stay behind adapters.
@@ -63,7 +66,7 @@ The invariant is that strategy math does not care which vendor supplied the data
 | Factors | Broad experimental library | Flat, testable, promotable registry |
 | Weighting | IC/meta-learning research logic | Purged and causal production-shaped implementation |
 | Portfolio | Contest/research portfolio construction | Broker-ready target weights |
-| Execution | Stops at artifacts | Rebalancer, broker preflight, sandbox execution, reconciliation |
+| Execution | Stops at artifacts | Rebalancer, broker preflight, sandbox execution, polling, reconciliation |
 | Review | CSV/dashboard research artifacts | Morning report, ledger, Streamlit console, health and drift |
 
 The immediate conversion target is Tastytrade: translate Q23-derived daily alpha targets into safe, reviewable, sandbox-first order plans.
@@ -78,17 +81,18 @@ The immediate conversion target is Tastytrade: translate Q23-derived daily alpha
 | IC meta-learning | Implemented | Purged and causal; no look-ahead shortcuts |
 | Portfolio construction | Implemented | Scores to target weights with caps, smoothing, and no-trade logic |
 | Risk stack | Implemented | Vol target, drawdown throttle, overlays, and kill-switch concepts |
+| Execution-input artifact | Implemented | Daily price, dollar ADV, and liquidity state travel with each run |
 | Tastytrade SDK adapter | Implemented / gated | Typed community SDK path for dashboard and order workflow |
 | Legacy Tastytrade REST adapter | Retained | Supports existing DXLink, universe, and CLI integration during migration |
-| Streamlit console | Implemented | Observability, quotes, plan review, broker preflight, sandbox rebalance, audit |
-| Production Streamlit rebalance | Disabled | Requires persisted ADV inputs and completed production gates |
-| CLI rebalancer | Implemented / validating | Current reference path for ADV-capped order planning |
+| Streamlit console | Implemented | Observability, quotes, ADV-aware plans, preflight, sandbox execution, polling, cancellation, reconciliation, audit |
+| Production Streamlit rebalance | Disabled | Requires completed gates and a sustained sandbox operating record |
+| CLI rebalancer | Implemented / validating | Reference automation path while the dashboard operating record develops |
 | PIT universe | Accumulating / gate | Live snapshots are honest from collection start; deep history remains incomplete |
 | Live capital | Not active | Requires all gates below |
 
 ## Streamlit operations console
 
-The console is a local, single-user PM surface. It reads the same strategy artifacts and SQLite ledger as the CLI and uses a backend service boundary so order construction never lives in the UI code.
+The console is a local, single-user PM surface. It reads the same strategy artifacts and SQLite ledger as the CLI and uses backend service boundaries so order construction never lives in the UI code.
 
 ### Install
 
@@ -117,9 +121,12 @@ Never commit `.env`. The repository ignores it.
 
 ### Launch
 
+Run a current daily strategy build first so the dashboard has fresh targets and execution inputs:
+
 ```bash
 cd engine
 source .venv/bin/activate
+svyable daily
 python -m svyable.ui
 ```
 
@@ -129,26 +136,30 @@ Direct Streamlit launch is also supported:
 streamlit run svyable/streamlit_app.py
 ```
 
-The server binds to `127.0.0.1:8501` by default. Override with `SVYABLE_STREAMLIT_ADDRESS` and `SVYABLE_STREAMLIT_PORT` only when the network exposure is intentional and separately secured.
+The server binds to `127.0.0.1:8501` by default. Override with `SVYABLE_STREAMLIT_ADDRESS` and `SVYABLE_STREAMLIT_PORT` only when network exposure is intentional and separately secured.
 
 ### Dashboard surfaces
 
 - **Overview** — run health, warnings, shadow NAV, paper equity, and tracking drift.
 - **Strategy** — latest targets, gross budget, sleeve trust, IC health, factor weights, metadata, and morning report.
-- **Broker** — masked account identity, balances, positions, same-day orders, and quote lookup.
-- **Rebalance** — target-vs-position plan, missing-quote checks, broker preflight, and sandbox-only bulk submission.
+- **Broker** — masked account identity, balances, positions, same-day orders, order-status lookup, guarded cancellation, reconciliation, and quotes.
+- **Rebalance** — target-vs-position plan using persisted ADV/liquidity state, live quote validation, broker preflight, sandbox submission, polling, and post-order reconciliation.
 - **Audit** — SQLite order ledger, operational events, and append-only Tastytrade intent/preflight/response records.
 
 ### Dashboard safety invariants
 
 - Sandbox is the default (`TASTY_IS_TEST=true`).
+- The planner blocks on stale execution artifacts, missing quotes, missing ADV, or liquidity-mask violations.
+- ADV participation caps are applied before broker preflight.
 - Every order is normalized and validated in the backend.
 - Every order is broker-preflighted before submission.
 - Any broker warning or error blocks submission.
+- Submitted sandbox orders are polled and followed by broker-vs-target reconciliation.
 - Intent, preflight, response, and cancellation events are appended to a JSONL audit log.
 - Account numbers are masked in read-only dashboard views.
-- Sandbox submission requires an acknowledgement and typed confirmation phrase.
-- Production bulk submission from Streamlit is disabled until ADV is loaded and enforced in the UI planner.
+- Sandbox submission and cancellation require acknowledgement and typed confirmation phrases.
+- Production cancellation requires the configured account number.
+- Production bulk submission from Streamlit remains disabled.
 - `SVYABLE_ENABLE_LIVE=false` remains the default and must stay false until the production gates pass.
 
 ## Tastytrade adapter split
@@ -185,14 +196,15 @@ No live-capital operation until all three gates pass.
 - Intended, preflighted, submitted, filled, and actual positions reconcile.
 - Shadow-vs-paper drift is visible and within an accepted operating band.
 - Failure escalation and a dead-man heartbeat are operational.
+- A sustained sandbox record demonstrates repeatable daily operation.
 
 ## Daily operating loop
 
 1. **Session/bootstrap** — validate credentials, tokens, account, and universe state.
-2. **Daily compute** — build the panel, compute factors, emit targets and evidence.
+2. **Daily compute** — build the panel and emit targets plus price/ADV/liquidity evidence.
 3. **PM review** — inspect data health, risk, drift, factors, targets, and proposed orders.
 4. **Broker preflight** — estimate buying-power and fee effects; block on warnings/errors.
-5. **Sandbox execution** — validate order lifecycle, fills, ledger, and reconciliation.
+5. **Sandbox execution** — submit, poll, record account equity, and reconcile.
 6. **Production operation** — unavailable until every gate passes.
 
 ## Performance language
@@ -220,6 +232,7 @@ README.md                         canonical narrative, setup, status, and gates
 engine/svyable/                   active strategy and operations implementation
 engine/svyable/streamlit_app.py   dashboard composition
 engine/svyable/dashboard_*.py     dashboard services and views
+engine/svyable/execution_control.py ADV-aware planning, polling, reconciliation
 engine/svyable/tastytrade_sdk.py  typed community-SDK broker adapter
 engine/svyable/tastytrade.py      retained REST/DXLink-compatible adapter
 engine/tests/                     offline and regression tests
@@ -228,8 +241,8 @@ ops/CLAUDE_LOOP.md                scheduled review/supervision loop
 
 ## Next actions
 
-1. Persist daily ADV and liquidity inputs as strategy artifacts, then enforce them in the Streamlit planner.
-2. Add sandbox integration tests with real Tastytrade credentials in a secret-managed CI/manual environment.
-3. Complete fill polling, cancellation, and post-fill reconciliation in the SDK path.
+1. Add sandbox integration tests with real Tastytrade credentials in a secret-managed manual environment.
+2. Add transaction/fill detail capture and compare executed prices against preflight marks.
+3. Build daily execution-quality and slippage reporting in the ledger/dashboard.
 4. Accumulate point-in-time universe snapshots and source historical membership data.
 5. Establish a sustained paper operating record before considering any live-capital path.
