@@ -1,6 +1,6 @@
 """Backend service for the Streamlit operations console.
 
-The service owns all filesystem, ledger, strategy-artifact, and broker access.
+The service owns filesystem, ledger, strategy-artifact, and broker access.
 Streamlit only renders returned data and collects explicit confirmations.
 """
 
@@ -15,15 +15,14 @@ from typing import Any
 import pandas as pd
 
 from svyable.broker_settings import TastySettings
-from svyable.config import nasdaq_lo_config
+from svyable.execution_control import ExecutionControlMixin
 from svyable.ledger import Ledger
-from svyable.rebalancer import PlannedOrder, plan_orders
 from svyable.tastytrade_sdk import OrderIntent, TastySdkBroker
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
 
 
-class DashboardService:
+class DashboardService(ExecutionControlMixin):
     def __init__(
         self,
         *,
@@ -84,6 +83,7 @@ class DashboardService:
                 "sleeve_weights": pd.DataFrame(),
                 "ic_health": pd.DataFrame(),
                 "pnl": pd.DataFrame(),
+                "execution_inputs": pd.DataFrame(),
                 "meta": {},
                 "report": "",
                 "factor_weights": {},
@@ -103,6 +103,7 @@ class DashboardService:
             "sleeve_weights": self._read_frame(run_dir / "sleeve_weights.csv"),
             "ic_health": self._read_frame(run_dir / "ic_health.csv"),
             "pnl": self._read_frame(run_dir / "pnl_diag.csv"),
+            "execution_inputs": self._read_frame(run_dir / "execution_inputs.csv"),
             "meta": meta,
             "report": (run_dir / "morning_report.md").read_text()
             if (run_dir / "morning_report.md").exists()
@@ -158,118 +159,6 @@ class DashboardService:
         targets = weights[column].astype(float)
         targets.index = targets.index.astype(str)
         return targets
-
-    def build_rebalance_plan(
-        self, *, min_order_notional: float = 100.0
-    ) -> dict[str, Any]:
-        targets = self.target_series()
-        account = self.broker.get_account()
-        positions = self.broker.get_positions()
-        symbols = sorted(set(targets.index) | set(positions))
-        prices = self.broker.execution_prices(symbols)
-        missing_prices = sorted(set(symbols) - set(prices))
-        cfg = nasdaq_lo_config()
-
-        orders = plan_orders(
-            targets,
-            account["equity"],
-            prices,
-            positions,
-            cfg,
-            adv=None,
-            min_order_notional=min_order_notional,
-        )
-        return {
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-            "account": account,
-            "positions": positions,
-            "targets": targets.to_dict(),
-            "prices": prices,
-            "missing_prices": missing_prices,
-            "orders": [asdict(order) for order in orders],
-            "estimated_turnover": sum(order.est_notional for order in orders),
-            "warning": (
-                "ADV caps are not applied in the dashboard plan because the latest "
-                "daily panel is not loaded here. The CLI rebalancer remains the "
-                "production reference for ADV-capped bulk execution."
-            ),
-        }
-
-    def preflight_plan(self, plan: dict[str, Any]) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for row in plan.get("orders", []):
-            intent = OrderIntent(
-                symbol=row["symbol"],
-                side=row["side"],
-                quantity=int(row["qty"]),
-                order_type="market",
-                dry_run=True,
-            )
-            result = self.broker.preflight(intent)
-            results.append(result)
-        return results
-
-    def submit_plan(
-        self, plan: dict[str, Any], *, confirmation: str
-    ) -> dict[str, Any]:
-        if not self.settings.is_test:
-            raise RuntimeError(
-                "Production bulk submission from Streamlit is disabled until the "
-                "dashboard planner loads and enforces current ADV caps. Use the CLI "
-                "rebalancer for the production reference path."
-            )
-        orders = [PlannedOrder(**row) for row in plan.get("orders", [])]
-        results: list[dict[str, Any]] = []
-        for order in orders:
-            result = self.broker.submit_intent(
-                OrderIntent(
-                    symbol=order.symbol,
-                    side=order.side,
-                    quantity=order.qty,
-                    order_type="market",
-                    dry_run=False,
-                ),
-                confirmation=confirmation,
-            )
-            results.append(result)
-
-        ledger = Ledger(self.ledger_path)
-        try:
-            status = "ok" if all(
-                str(item.get("status", "")).lower()
-                not in {"error", "rejected_preflight", "blocked"}
-                for item in results
-            ) else "degraded"
-            run_id = ledger.record_run(
-                kind="rebalance",
-                strategy=self.strategy_id,
-                status=status,
-                metrics={
-                    "orders": len(orders),
-                    "broker": "tastytrade-sdk",
-                    "environment": self.settings.environment,
-                },
-            )
-            ledger.record_orders(
-                run_id,
-                "tastytrade-sdk",
-                False,
-                [asdict(order) for order in orders],
-                results,
-            )
-            ledger.record_event(
-                "info" if status == "ok" else "warning",
-                "streamlit",
-                f"Submitted {len(orders)} Tastytrade orders from dashboard; status={status}",
-            )
-        finally:
-            ledger.close()
-
-        return {
-            "status": status,
-            "submitted": len(results),
-            "results": results,
-        }
 
     def preview_manual_order(self, intent: OrderIntent) -> dict[str, Any]:
         return self.broker.preflight(intent.normalized())
