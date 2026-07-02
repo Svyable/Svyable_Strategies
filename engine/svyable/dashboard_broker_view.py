@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pandas as pd
 import streamlit as st
 
@@ -13,11 +15,22 @@ from svyable.sandbox_check import run_sandbox_check
 
 def render_broker(service: DashboardService, settings: TastySettings) -> None:
     st.caption("Broker state and order controls use the typed `tastytrade>=12` adapter.")
-    try:
-        snapshot = service.broker_snapshot()
-    except Exception as exc:
-        st.error(f"Broker unavailable: {exc}")
-        return
+    cache_key = f"broker_snapshot::{settings.environment}::{service.output_root}"
+    refresh = st.button("Refresh broker account snapshot", type="primary")
+    if refresh or cache_key not in st.session_state:
+        try:
+            with st.spinner("Loading Tastytrade account state..."):
+                st.session_state[cache_key] = {
+                    "loaded_at": datetime.now().isoformat(timespec="seconds"),
+                    "data": service.broker_snapshot(),
+                }
+        except Exception as exc:
+            st.error(f"Broker unavailable: {exc}")
+            return
+
+    cached = st.session_state[cache_key]
+    snapshot = cached["data"]
+    st.caption(f"Snapshot loaded {cached['loaded_at']} local time.")
     account = snapshot["account"]
     number = str(snapshot["account_number"])
     masked = f"…{number[-4:]}" if number else "not configured"
@@ -80,6 +93,7 @@ def render_broker(service: DashboardService, settings: TastySettings) -> None:
         if st.button("Request cancellation", disabled=not enabled, type="primary"):
             try:
                 result = service.cancel_order(int(cancel_id), confirmation=confirmation)
+                st.session_state.pop(cache_key, None)
                 st.warning(f"Cancellation response: {result.get('status', 'requested')}")
                 st.json(result)
             except Exception as exc:
