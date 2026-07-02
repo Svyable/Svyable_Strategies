@@ -15,6 +15,35 @@ def render_audit(service: DashboardService) -> None:
     st.subheader("Ledger orders")
     st.dataframe(snapshot["orders"], use_container_width=True, hide_index=True)
 
+    st.subheader("Delayed fill recovery")
+    st.caption(
+        "Recent broker order IDs are re-queried and transactions are inserted "
+        "idempotently. This also captures later partial fills."
+    )
+    days = st.number_input(
+        "Backfill lookback days",
+        min_value=1,
+        max_value=30,
+        value=5,
+        step=1,
+    )
+    if st.button("Backfill Tastytrade trade transactions"):
+        try:
+            result = service.backfill_execution_quality(int(days))
+            st.session_state["fill_backfill_result"] = result
+            if result["status"] == "no_orders":
+                st.info("No recent broker-linked orders were found.")
+            else:
+                st.success(
+                    f"Checked {result['orders_checked']} orders and found "
+                    f"{result['fills_found']} transactions."
+                )
+        except Exception as exc:
+            st.error(str(exc))
+    if st.session_state.get("fill_backfill_result"):
+        with st.expander("Latest backfill result"):
+            st.json(st.session_state["fill_backfill_result"])
+
     ledger = Ledger(service.ledger_path)
     try:
         fills = ledger.execution_quality_frame(500)
@@ -22,6 +51,11 @@ def render_audit(service: DashboardService) -> None:
         ledger.close()
 
     st.subheader("Execution quality")
+    st.caption(
+        f"Signed slippage alert thresholds: warning "
+        f"{service.settings.slippage_warn_bps:.1f} bps, critical "
+        f"{service.settings.slippage_critical_bps:.1f} bps. Positive is worse."
+    )
     if fills.empty:
         st.info("No broker fill transactions have been recorded yet.")
     else:
