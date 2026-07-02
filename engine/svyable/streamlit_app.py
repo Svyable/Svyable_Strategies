@@ -63,7 +63,7 @@ def render() -> None:
     with tabs[1]:
         render_strategy(service)
     with tabs[2]:
-        render_broker(service)
+        render_broker(service, settings)
     with tabs[3]:
         render_rebalance(service, settings)
     with tabs[4]:
