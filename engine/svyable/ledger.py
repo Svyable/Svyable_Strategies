@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS orders (
   ts TEXT NOT NULL,
   run_id INTEGER,
   broker TEXT,
+  broker_order_id INTEGER,
   dry_run INTEGER,
   symbol TEXT, side TEXT, qty REAL, est_price REAL, est_notional REAL,
   status TEXT, reason TEXT
@@ -76,7 +77,25 @@ class Ledger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.con = sqlite3.connect(self.path)
         self.con.executescript(_SCHEMA)
+        self._ensure_column("orders", "broker_order_id", "INTEGER")
+        self._dedupe_fill_transactions()
+        self.con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS fills_transaction_uq "
+            "ON fills(transaction_id)"
+        )
         self.con.commit()
+
+    def _ensure_column(self, table: str, column: str, sql_type: str) -> None:
+        existing = {row[1] for row in self.con.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            self.con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
+
+    def _dedupe_fill_transactions(self) -> None:
+        self.con.execute(
+            "DELETE FROM fills WHERE transaction_id IS NOT NULL AND id NOT IN ("
+            " SELECT MIN(id) FROM fills WHERE transaction_id IS NOT NULL"
+            " GROUP BY transaction_id)"
+        )
 
     def record_run(self, *, kind: str, strategy: str, status: str,
                    config_hash: str = "", data_last_date: str = "",
@@ -93,25 +112,26 @@ class Ledger:
 
     def record_orders(self, run_id: int, broker: str, dry_run: bool,
                       planned: list[dict], results: list[dict]) -> None:
-        status_by_symbol = {r.get("symbol"): r.get("status", "") for r in results}
+        result_by_symbol = {r.get("symbol"): r for r in results}
         for order in planned:
+            result = result_by_symbol.get(order["symbol"], {})
             self.con.execute(
-                "INSERT INTO orders (ts, run_id, broker, dry_run, symbol, side,"
-                " qty, est_price, est_notional, status, reason)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO orders (ts, run_id, broker, broker_order_id, dry_run,"
+                " symbol, side, qty, est_price, est_notional, status, reason)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (datetime.now().isoformat(timespec="seconds"), run_id, broker,
-                 int(dry_run), order["symbol"], order["side"], order["qty"],
-                 order["est_price"], order["est_notional"],
-                 "planned" if dry_run else status_by_symbol.get(order["symbol"], "submitted"),
+                 result.get("id"), int(dry_run), order["symbol"], order["side"],
+                 order["qty"], order["est_price"], order["est_notional"],
+                 "planned" if dry_run else result.get("status", "submitted"),
                  order.get("reason", "")))
         self.con.commit()
 
     def record_fills(self, run_id: int, broker: str, fills: list[dict]) -> None:
         for fill in fills:
             self.con.execute(
-                "INSERT INTO fills (ts, run_id, broker, broker_order_id, transaction_id,"
-                " symbol, side, qty, fill_price, reference_price, slippage_bps, fees,"
-                " venue, exec_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO fills (ts, run_id, broker, broker_order_id,"
+                " transaction_id, symbol, side, qty, fill_price, reference_price,"
+                " slippage_bps, fees, venue, exec_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     fill.get("executed_at") or datetime.now().isoformat(timespec="seconds"),
                     run_id,
@@ -130,6 +150,17 @@ class Ledger:
                 ),
             )
         self.con.commit()
+
+    def unfilled_orders(self, since_days: int = 5) -> pd.DataFrame:
+        return pd.read_sql_query(
+            "SELECT o.run_id, o.broker_order_id, o.symbol, o.side, o.qty,"
+            " o.est_price, o.ts FROM orders o LEFT JOIN fills f"
+            " ON f.broker_order_id = o.broker_order_id"
+            " WHERE o.broker_order_id IS NOT NULL AND f.id IS NULL"
+            " AND o.ts >= datetime('now', ?) ORDER BY o.id",
+            self.con,
+            params=(f"-{since_days} days",),
+        )
 
     def record_equity(self, d: date | str, *, shadow_nav: float | None = None,
                       paper_equity: float | None = None, note: str = "") -> None:
