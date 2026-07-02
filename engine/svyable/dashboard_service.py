@@ -160,6 +160,14 @@ class DashboardService(ExecutionControlMixin):
         targets.index = targets.index.astype(str)
         return targets
 
+    def reconcile_now(self, tolerance_w: float = 0.01) -> dict[str, Any]:
+        execution = self.execution_inputs()
+        if execution["stale"]:
+            raise RuntimeError(
+                "Execution inputs are stale; run `svyable daily` before reconciliation."
+            )
+        return super().reconcile_now(tolerance_w=tolerance_w)
+
     def preview_manual_order(self, intent: OrderIntent) -> dict[str, Any]:
         return self.broker.preflight(intent.normalized())
 
