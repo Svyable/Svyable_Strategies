@@ -30,7 +30,11 @@ class FakeClient:
         if path.endswith("/positions"):
             return {"items": [
                 {"instrument-type": "Equity", "symbol": "MRVL",
-                 "quantity": "22", "quantity-direction": "Long"},
+                 "quantity": "22", "quantity-direction": "Long",
+                 "average-open-price": "90.0", "multiplier": 1,
+                 "average-daily-market-close-price": "98.0",
+                 "close-price": "98.0", "realized-day-gain": "0.0",
+                 "realized-day-gain-date": "2020-01-01"},
                 {"instrument-type": "Equity", "symbol": "XYZ",
                  "quantity": "5", "quantity-direction": "Short"},
                 {"instrument-type": "Equity Option", "symbol": "SPY 25...",
@@ -159,6 +163,20 @@ def test_dxlink_compact_parsing():
     assert evs[1]["open"] == 213.5
 
 
+def test_pnl_report_formulas():
+    b = _broker()
+    rep = b.pnl_report()
+    mrvl = next(p for p in rep["positions"] if p["symbol"] == "MRVL")
+    # mark = mid 100.0; unrealized = (100-90)*22 = 220; day = (100-98)*22 = 44
+    assert mrvl["unrealized"] == 220.0 and mrvl["pl_day"] == 44.0
+    assert mrvl["value"] == 2200.0
+    # net liq = MRVL value (2200) + short XYZ value (-500, direction -1 per docs)
+    # + cash (40k) + pending (0)
+    xyz = next(p for p in rep["positions"] if p["symbol"] == "XYZ")
+    assert xyz["value"] == -500.0
+    assert abs(rep["net_liq"] - (2200.0 - 500.0 + 40000.0)) < 1e-6
+
+
 def test_terminal_statuses():
     from svyable.tastytrade import TERMINAL_ORDER_STATUSES
     assert "Partially Removed" in TERMINAL_ORDER_STATUSES
@@ -175,5 +193,6 @@ if __name__ == "__main__":
     test_market_snapshot_and_execution_prices()
     test_universe_snapshot_filtering()
     test_dxlink_compact_parsing()
+    test_pnl_report_formulas()
     test_terminal_statuses()
     print("ALL TASTYTRADE TESTS PASSED")

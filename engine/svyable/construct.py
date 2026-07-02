@@ -96,6 +96,58 @@ def _hrp_weights(ret_win: np.ndarray) -> np.ndarray | None:
     return w / (w.sum() + EPS)
 
 
+def apply_cluster_caps(w: np.ndarray, sel_idx: np.ndarray, R: np.ndarray,
+                       cap: float, thresh: float) -> np.ndarray:
+    """Cap the total weight of any correlation cluster among selected seats.
+
+    Clusters = connected components of the graph where seats i,j are linked if
+    corr(returns_i, returns_j) > thresh over the trailing window. The risk
+    stack sees vol but not theme concentration (an all-semis book looks fine
+    to a vol targeter until the theme breaks); this is the concentration brake.
+    Excess weight is redistributed pro-rata to uncapped seats.
+    """
+    k = len(sel_idx)
+    if k < 3 or R.shape[0] < 40:
+        return w
+    sub = R[:, sel_idx]
+    sd = np.nanstd(sub, axis=0)
+    ok = sd > 1e-12
+    if ok.sum() < 3:
+        return w
+    C = np.corrcoef(np.nan_to_num(sub[:, ok]).T)
+
+    # connected components via label propagation (tiny k, loop is fine)
+    idx_ok = sel_idx[ok]
+    labels = np.arange(len(idx_ok))
+    for _ in range(len(idx_ok)):
+        changed = False
+        for i in range(len(idx_ok)):
+            for j in range(i + 1, len(idx_ok)):
+                if C[i, j] > thresh and labels[j] != labels[i]:
+                    m = min(labels[i], labels[j])
+                    labels[labels == labels[i]] = m
+                    labels[labels == labels[j]] = m
+                    changed = True
+        if not changed:
+            break
+
+    out = w.copy()
+    excess_total = 0.0
+    capped_assets: set[int] = set()
+    for lab in np.unique(labels):
+        members = idx_ok[labels == lab]
+        cw = out[members].sum()
+        if cw > cap and len(members) > 1:
+            out[members] *= cap / cw
+            excess_total += cw - cap
+            capped_assets.update(members.tolist())
+    if excess_total > 1e-9:
+        rest = np.array([i for i in sel_idx if i not in capped_assets])
+        if len(rest) and out[rest].sum() > 1e-9:
+            out[rest] *= (out[rest].sum() + excess_total) / out[rest].sum()
+    return out
+
+
 @dataclass
 class ConstructResult:
     unit_weights: pd.DataFrame
@@ -164,6 +216,12 @@ def build_unit_weights(score: pd.DataFrame, returns: pd.DataFrame,
         lo = np.where(sel, cfg.min_pos, 0.0)
         hi = np.where(sel, cfg.max_pos, 0.0)
         target = project_capped_simplex(tilted, 1.0, lo, hi)
+
+        if cfg.cluster_weight_cap < 1.0 and t >= cfg.cluster_corr_win:
+            target = apply_cluster_caps(
+                target, sel_idx, Rv[t - cfg.cluster_corr_win:t],
+                cfg.cluster_weight_cap, cfg.cluster_corr_thresh)
+            target = project_capped_simplex(target, 1.0, lo, hi)
 
         if t > 0:
             l1 = np.abs(target - prev).sum()

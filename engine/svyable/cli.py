@@ -188,7 +188,7 @@ def cmd_walkforward(args) -> int:
 def cmd_rebalance(args) -> int:
     import pandas as pd
     from svyable.config import nasdaq_lo_config
-    from svyable.brokers import LocalPaperBroker, AlpacaBroker
+    from svyable.brokers import LocalPaperBroker
     from svyable.rebalancer import plan_orders, execute_plan, reconcile
 
     cfg = nasdaq_lo_config()
@@ -207,9 +207,7 @@ def cmd_rebalance(args) -> int:
     prices = panel.close.iloc[-1].dropna().to_dict()
     adv = panel.adv(cfg.adv_win).iloc[-1].dropna().to_dict()
 
-    if args.broker == "alpaca":
-        broker = AlpacaBroker(alpaca_live=False)   # live requires code change, on purpose
-    elif args.broker == "tasty":
+    if args.broker == "tasty":
         from svyable.tastytrade import TastytradeBroker
         broker = TastytradeBroker()                # sandbox unless TT_ENV+allow_production
         try:                                       # live quotes beat yesterday's close
@@ -287,6 +285,14 @@ def cmd_tasty(args) -> int:
     elif args.action == "quotes":
         syms = (args.symbols or args.symbol).replace(" ", "").split(",")
         print(json.dumps(b.get_market_snapshot(syms), indent=2))
+    elif args.action == "pnl":
+        rep = b.pnl_report()
+        for p in rep["positions"]:
+            print(f"  {p['symbol']:<6} {p['qty']:>8.0f} @ {p['mark']:>9.2f}  "
+                  f"value ${p['value']:>11,.0f}  unreal ${p['unrealized']:>9,.0f}  "
+                  f"day ${p['pl_day']:>8,.0f}")
+        print(f"net liq ${rep['net_liq']:,.2f} | cash ${rep['cash_balance']:,.2f} | "
+              f"unrealized ${rep['total_unrealized']:,.2f} | day P/L ${rep['total_pl_day']:,.2f}")
     return 0
 
 
@@ -423,7 +429,7 @@ def main(argv=None) -> int:
     wf.add_argument("--no-sensitivity", action="store_true")
 
     rb = sub.add_parser("rebalance")
-    rb.add_argument("--broker", choices=["paper", "alpaca", "tasty"], default="paper")
+    rb.add_argument("--broker", choices=["paper", "tasty"], default="paper")
     rb.add_argument("--equity", type=float, default=100_000.0,
                     help="starting cash for a fresh local paper account")
     rb.add_argument("--execute", action="store_true",
@@ -436,7 +442,8 @@ def main(argv=None) -> int:
     u.add_argument("--exchange", default="XNAS")
 
     t = sub.add_parser("tasty")
-    t.add_argument("action", choices=["status", "orders", "cancel", "dry-run", "quotes"])
+    t.add_argument("action", choices=["status", "orders", "cancel", "dry-run",
+                                      "quotes", "pnl"])
     t.add_argument("--symbols", default=None, help="comma-separated (quotes action)")
     t.add_argument("--id", type=int, default=None, help="order id (cancel)")
     t.add_argument("--date", default=None, help="start date for orders search")

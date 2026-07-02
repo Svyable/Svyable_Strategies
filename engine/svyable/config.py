@@ -97,6 +97,12 @@ class SvyableConfig:
     weight_smooth_alpha: float = 0.40
     no_trade_band: float = 0.04      # skip rebalance if L1 diff below this
     seat_weighting: str = "score"    # "score" | "hrp" | "blend"
+    # statistical cluster caps (no sector data needed): seats whose trailing
+    # correlation exceeds the threshold form a cluster; each cluster's total
+    # weight is capped and the excess redistributed to the rest of the book
+    cluster_corr_thresh: float = 0.70
+    cluster_weight_cap: float = 0.40
+    cluster_corr_win: int = 126
 
     # ---- risk budget (§12.4) ----
     target_vol: float = 0.18

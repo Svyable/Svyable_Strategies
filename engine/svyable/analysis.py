@@ -65,6 +65,12 @@ def factor_report(panel: Panel, cfg: SvyableConfig,
             if h == 21:
                 # overlap-corrected significance + regime stability
                 row["tstat_nw21"] = round(nw_tstat(ic, lag=h), 2)
+                # vol-regime conditioning: market realized vol terciles
+                mvol = panel.market_ret.rolling(63, min_periods=21).std() \
+                    .reindex(ic.index)
+                lo_t, hi_t = mvol.quantile(1 / 3), mvol.quantile(2 / 3)
+                row["ic21_lowvol"] = round(float(ic[mvol <= lo_t].mean()), 4)
+                row["ic21_highvol"] = round(float(ic[mvol >= hi_t].mean()), 4)
                 half = len(ic) // 2
                 row["ic21_h1"] = round(float(ic.iloc[:half].mean()), 4)
                 row["ic21_h2"] = round(float(ic.iloc[half:].mean()), 4)

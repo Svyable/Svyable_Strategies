@@ -293,6 +293,67 @@ class TastytradeBroker:
                 }
         return out
 
+    def pnl_report(self) -> dict:
+        """Position + account P/L per the tastytrade formulas:
+        unrealized = (mark - average-open-price) * qty * multiplier * dir
+        day P/L    = (mark - average-daily-market-close-price) * qty * mult * dir
+                     + realized-day-gain (if dated today)
+        value      = mark * qty * mult * dir
+        net liq    = sum(values) + cash-balance + pending-cash (signed by effect)
+        """
+        items = self.c.request("GET", f"/accounts/{self.account}/positions").get("items", [])
+        marks = self.execution_prices(sorted({p["symbol"] for p in items
+                                              if p.get("instrument-type") == "Equity"}))
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        def _f(x, d=0.0):
+            try:
+                return float(x)
+            except (TypeError, ValueError):
+                return d
+
+        positions, total_value, total_unreal, total_day = [], 0.0, 0.0, 0.0
+        for p in items:
+            if p.get("instrument-type") != "Equity":
+                continue
+            qty, mult = _f(p.get("quantity")), _f(p.get("multiplier"), 1.0)
+            if qty == 0:
+                continue
+            d = -1.0 if p.get("quantity-direction") == "Short" else 1.0
+            sym = p["symbol"]
+            mark = marks.get(sym) or _f(p.get("close-price"))
+            avg_open = _f(p.get("average-open-price"))
+            day_basis = _f(p.get("average-daily-market-close-price"), avg_open)
+            unreal = (mark - avg_open) * qty * mult * d
+            day_unreal = (mark - day_basis) * qty * mult * d
+            r_day = _f(p.get("realized-day-gain"))
+            if p.get("realized-day-gain-date") != today:
+                r_day = 0.0
+            elif p.get("realized-day-gain-effect") == "Debit":
+                r_day = -r_day
+            value = mark * qty * mult * d
+            positions.append({"symbol": sym, "qty": qty * d, "mark": mark,
+                              "avg_open": avg_open,
+                              "unrealized": round(unreal, 2),
+                              "pl_day": round(day_unreal + r_day, 2),
+                              "value": round(value, 2)})
+            total_value += value
+            total_unreal += unreal
+            total_day += day_unreal + r_day
+
+        b = self.c.request("GET", f"/accounts/{self.account}/balances")
+        cash = _f(b.get("cash-balance"))
+        pending = _f(b.get("pending-cash"))
+        if b.get("pending-cash-effect") == "Debit":
+            pending = -pending
+        return {"account": self.account,
+                "positions": sorted(positions, key=lambda x: -abs(x["value"])),
+                "total_position_value": round(total_value, 2),
+                "cash_balance": round(cash, 2), "pending_cash": round(pending, 2),
+                "net_liq": round(total_value + cash + pending, 2),
+                "total_unrealized": round(total_unreal, 2),
+                "total_pl_day": round(total_day, 2)}
+
     def execution_prices(self, symbols: list[str]) -> dict[str, float]:
         """Best available price per symbol: mid > last > close > prev_close."""
         snap = self.get_market_snapshot(symbols)
