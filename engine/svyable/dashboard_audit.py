@@ -35,8 +35,9 @@ def render_audit(service: DashboardService) -> None:
                 st.info("No recent broker-linked orders were found.")
             else:
                 st.success(
-                    f"Checked {result['orders_checked']} orders and found "
-                    f"{result['fills_found']} transactions."
+                    f"Checked {result['orders_checked']} orders, found "
+                    f"{result['fills_found']} transactions, and recorded "
+                    f"{result['fills_recorded']} new rows."
                 )
         except Exception as exc:
             st.error(str(exc))
