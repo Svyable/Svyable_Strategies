@@ -52,5 +52,8 @@ jobs:
       - name: Fill quality regression
         run: python tests/test_execution_quality.py
 
+      - name: Delayed fill recovery regression
+        run: python tests/test_execution_backfill.py
+
       - name: Core synthetic smoke
         run: python -m svyable.cli --out /tmp/svyable-ci smoke
