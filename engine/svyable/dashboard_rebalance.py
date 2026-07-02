@@ -37,6 +37,9 @@ def render_rebalance(service: DashboardService, settings: TastySettings) -> None
     cols[2].metric("Account equity", money(plan["account"].get("equity")))
     cols[3].metric("Missing quotes", len(plan["missing_prices"]))
     st.dataframe(pd.DataFrame(plan["orders"]), use_container_width=True, hide_index=True)
+    if not plan["orders"]:
+        st.success("Portfolio is within the configured order threshold; no orders planned.")
+        return
     if plan["missing_prices"]:
         st.error("Missing execution prices: " + ", ".join(plan["missing_prices"]))
         return
@@ -63,6 +66,12 @@ def render_rebalance(service: DashboardService, settings: TastySettings) -> None
     st.dataframe(table, use_container_width=True, hide_index=True)
     if any(x["warnings"] or x["errors"] for x in checks):
         st.error("At least one preflight is blocked. Submission is disabled.")
+        return
+    if not settings.is_test:
+        st.info(
+            "Production mode is plan-and-preflight only in Streamlit. "
+            "Use the ADV-capped CLI workflow for any production reference run."
+        )
         return
     enabled, confirmation = submission_confirmation(settings, "SUBMIT")
     if st.button("Submit sandbox rebalance orders", disabled=not enabled, type="primary"):
