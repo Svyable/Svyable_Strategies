@@ -93,8 +93,10 @@ def test_backfill_is_idempotent_and_escalates_slippage():
         second = service.backfill_execution_quality(since_days=5)
 
         assert first["fills_found"] == 1
+        assert first["fills_recorded"] == 1
         assert first["execution_quality"]["worst_slippage_bps"] == 100.0
         assert second["fills_found"] == 1
+        assert second["fills_recorded"] == 0
 
         ledger = Ledger(path)
         fills = ledger.execution_quality_frame()
@@ -106,7 +108,7 @@ def test_backfill_is_idempotent_and_escalates_slippage():
 
         assert len(fills) == 1
         assert fills.iloc[0]["broker_order_id"] == 7001
-        assert escalations >= 1
+        assert escalations == 1
 
 
 if __name__ == "__main__":
