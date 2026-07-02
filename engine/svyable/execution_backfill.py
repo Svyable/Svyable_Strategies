@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any
 
 import pandas as pd
@@ -86,6 +85,7 @@ class ExecutionBackfillMixin:
                     "status": "no_orders",
                     "orders_checked": 0,
                     "fills_found": 0,
+                    "fills_recorded": 0,
                     "execution_quality": execution_summary([]),
                 }
 
@@ -95,6 +95,19 @@ class ExecutionBackfillMixin:
                 self.broker, order_ids, start_date=start_date
             )
             fills = score_fills(raw_fills, orders.to_dict(orient="records"))
+            existing_ids = {
+                int(row[0])
+                for row in ledger.con.execute(
+                    "SELECT transaction_id FROM fills WHERE transaction_id IS NOT NULL"
+                )
+            }
+            new_fills = [
+                fill
+                for fill in fills
+                if fill.get("transaction_id") is not None
+                and int(fill["transaction_id"]) not in existing_ids
+            ]
+
             run_by_order = {
                 int(row.broker_order_id): int(row.run_id)
                 for row in orders.itertuples()
@@ -102,28 +115,30 @@ class ExecutionBackfillMixin:
             for run_id in sorted(set(run_by_order.values())):
                 run_fills = [
                     fill
-                    for fill in fills
+                    for fill in new_fills
                     if run_by_order.get(int(fill["order_id"])) == run_id
                 ]
                 if run_fills:
                     ledger.record_fills(run_id, "tastytrade-sdk", run_fills)
 
-            quality = execution_summary(fills)
+            quality = execution_summary(new_fills)
             ledger.record_event(
                 "info",
                 "execution_quality",
-                f"Backfill checked {len(order_ids)} broker orders and found "
-                f"{len(fills)} trade transactions.",
+                f"Backfill checked {len(order_ids)} broker orders, found "
+                f"{len(fills)} transactions, and recorded {len(new_fills)} new rows.",
             )
-            self._record_slippage_event(
-                ledger, quality, source="execution_quality_backfill"
-            )
+            if new_fills:
+                self._record_slippage_event(
+                    ledger, quality, source="execution_quality_backfill"
+                )
             return {
                 "status": "ok",
                 "orders_checked": len(order_ids),
                 "fills_found": len(fills),
+                "fills_recorded": len(new_fills),
                 "execution_quality": quality,
-                "fills": fills,
+                "fills": new_fills,
             }
         finally:
             ledger.close()
