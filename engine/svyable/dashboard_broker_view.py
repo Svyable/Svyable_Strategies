@@ -1,16 +1,17 @@
-"""Read-only broker account, position, order, and quote view."""
+"""Broker account, position, order, quote, and reconciliation view."""
 
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
+from svyable.broker_settings import TastySettings
 from svyable.dashboard_service import DashboardService
-from svyable.dashboard_ui import money
+from svyable.dashboard_ui import cancellation_confirmation, money
 
 
-def render_broker(service: DashboardService) -> None:
-    st.caption("Read-only broker state from the typed `tastytrade>=12` SDK adapter.")
+def render_broker(service: DashboardService, settings: TastySettings) -> None:
+    st.caption("Broker state and order controls use the typed `tastytrade>=12` adapter.")
     try:
         snapshot = service.broker_snapshot()
     except Exception as exc:
@@ -32,12 +33,58 @@ def render_broker(service: DashboardService) -> None:
         st.info("No positions.")
     else:
         st.dataframe(positions, use_container_width=True, hide_index=True)
+
     st.subheader("Orders today")
     orders = snapshot["orders"]
     if orders.empty:
         st.info("No orders returned for today.")
     else:
         st.dataframe(orders, use_container_width=True, hide_index=True)
+
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Order status")
+        status_id = st.number_input(
+            "Order ID", min_value=1, step=1, key="broker_status_order_id"
+        )
+        if st.button("Refresh order status"):
+            try:
+                st.json(service.order_status(int(status_id)))
+            except Exception as exc:
+                st.error(str(exc))
+    with right:
+        st.subheader("Request cancellation")
+        cancel_id = st.number_input(
+            "Order ID to cancel", min_value=1, step=1, key="broker_cancel_order_id"
+        )
+        enabled, confirmation = cancellation_confirmation(settings)
+        if st.button("Request cancellation", disabled=not enabled, type="primary"):
+            try:
+                result = service.cancel_order(int(cancel_id), confirmation=confirmation)
+                st.warning(f"Cancellation response: {result.get('status', 'requested')}")
+                st.json(result)
+            except Exception as exc:
+                st.error(str(exc))
+
+    st.subheader("Portfolio reconciliation")
+    tolerance = st.number_input(
+        "Weight drift tolerance",
+        min_value=0.001,
+        max_value=0.10,
+        value=0.01,
+        step=0.001,
+        format="%.3f",
+    )
+    if st.button("Reconcile broker positions to strategy targets"):
+        try:
+            result = service.reconcile_now(tolerance_w=float(tolerance))
+            if result["status"] == "ok":
+                st.success("Broker positions are within tolerance.")
+            else:
+                st.warning(f"Detected {len(result['drifts'])} position drifts.")
+            st.json(result)
+        except Exception as exc:
+            st.error(str(exc))
 
     st.subheader("Quote lookup")
     symbol = st.text_input("Symbol", value="SPY", key="broker_quote_symbol")
