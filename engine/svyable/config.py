@@ -18,6 +18,10 @@ class SleeveSpec:
     name: str
     horizons: tuple[int, ...]        # forward-return horizons for IC estimation
     stress_mult: float               # weight multiplier slope vs market drawdown stress
+    proven: bool = True              # proven sleeves get the anti-collapse min-weight
+    #                                  floor; shadow sleeves (proven=False) may bleed to
+    #                                  zero so the IC meta-learner can zero out an
+    #                                  untrusted sleeve (strategy.md §8.10/§13)
 
 
 @dataclass(frozen=True)
@@ -75,7 +79,7 @@ class SvyableConfig:
         SleeveSpec("defensive", (21,), +0.80),
         SleeveSpec("meanrev", (5, 21), +0.40),
         SleeveSpec("micro", (5, 21), +0.20),
-        SleeveSpec("ml", (21,), 0.0),
+        SleeveSpec("ml", (21,), 0.0, proven=False),   # shadow: earns weight only via IC
     )
     sleeve_horizon_for_weighting: int = 21
     stress_dd_cap: float = 0.10      # market dd at which stress saturates to 1

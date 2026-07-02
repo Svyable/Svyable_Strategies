@@ -115,7 +115,14 @@ def build_ensemble(panel: Panel, cfg: SvyableConfig,
     s = raw.sum(axis=1)
     w = raw.div(s + EPS, axis=0)
     w = w.where(s > EPS, other=1.0 / max(1, len(names)))
-    w = w.clip(lower=cfg.sleeve_min_weight)
+    # Anti-collapse floor applies only to PROVEN sleeves; shadow sleeves
+    # (proven=False) may fall to zero weight so an untrusted sleeve can be
+    # zeroed out by the IC meta-learner rather than guaranteed a slice of the
+    # book (strategy.md §8.10/§13). Per-column floor, then renormalize.
+    proven = {s.name for s in cfg.sleeves if s.proven}
+    floors = pd.Series({n: (cfg.sleeve_min_weight if n in proven else 0.0)
+                        for n in names})
+    w = w.clip(lower=floors, axis=1)
     w = w.div(w.sum(axis=1) + EPS, axis=0)
 
     score = composite_score(sleeve_scores, w)

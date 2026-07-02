@@ -113,6 +113,36 @@ def test_ledger_roundtrip(tmp_path=None):
         led.close()
 
 
+def test_shadow_sleeve_not_floored():
+    """A shadow sleeve (proven=False) with no predictive power must be allowed to
+    bleed toward zero weight — the sleeve-level IC meta-learner is the immune
+    system (strategy.md §8.10/§13). Proven sleeves keep their anti-collapse
+    floor. Injects a pure-noise 'ml' sleeve independent of forward returns."""
+    from svyable.config import nasdaq_lo_config
+    from svyable.sleeves import build_ensemble
+
+    panel = SyntheticProvider(n_assets=40, n_days=700, seed=3).get_panel()
+    cfg = nasdaq_lo_config(min_adv=0.0, min_price=0.0, ml_enabled=False,
+                           seats_base=15, seats_min=10, seats_max=20)
+
+    rng = np.random.default_rng(7)
+    noise = pd.DataFrame(rng.standard_normal(panel.close.shape),
+                         index=panel.close.index, columns=panel.close.columns)
+
+    ens = build_ensemble(panel, cfg, extra_sleeve_scores={"ml": noise})
+    sw = ens.sleeve_weights
+    assert "ml" in sw.columns
+
+    # zero-IC shadow sleeve is allowed near zero, not pinned at the floor
+    assert sw["ml"].min() < 0.01, (
+        f"shadow sleeve pinned above floor (min={sw['ml'].min():.4f}); the "
+        "meta-learner cannot zero out an untrusted sleeve")
+
+    # proven sleeves are still protected from full collapse
+    proven = [s.name for s in cfg.sleeves if s.proven and s.name in sw.columns]
+    assert (sw[proven] > 0).all().all(), "a proven sleeve collapsed to zero"
+
+
 def test_nw_tstat_corrects_overlap():
     """On an overlapping (autocorrelated) series, NW t must be well below the
     naive t; on iid noise they should roughly agree."""
@@ -146,6 +176,7 @@ if __name__ == "__main__":
     test_calendar()
     test_restatement_detection()
     test_ledger_roundtrip()
+    test_shadow_sleeve_not_floored()
     test_nw_tstat_corrects_overlap()
     test_bad_print_detection()
     print("ALL REGRESSION TESTS PASSED")
