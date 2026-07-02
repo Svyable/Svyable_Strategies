@@ -65,11 +65,14 @@ def _sleeve_score(F: dict[str, pd.DataFrame], panel: Panel, cfg: SvyableConfig,
 
 
 def build_ensemble(panel: Panel, cfg: SvyableConfig,
-                   extra_sleeve_scores: dict[str, pd.DataFrame] | None = None
+                   extra_sleeve_scores: dict[str, pd.DataFrame] | None = None,
+                   factors: dict[str, pd.DataFrame] | None = None
                    ) -> SleeveResult:
     """Compute all sleeves and combine. `extra_sleeve_scores` lets the ML sleeve
-    (or any future sleeve computed outside the factor registry) plug in."""
-    F = flib.compute_all(panel, cfg)
+    (or any future sleeve computed outside the factor registry) plug in.
+    `factors` accepts a precomputed factor library to avoid recomputing it
+    (the caller may already have it, e.g. for the ML sleeve)."""
+    F = flib.compute_all(panel, cfg) if factors is None else factors
     extra = extra_sleeve_scores or {}
 
     sleeve_scores: dict[str, pd.DataFrame] = {}

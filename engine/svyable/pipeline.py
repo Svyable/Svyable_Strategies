@@ -37,15 +37,19 @@ def run_pipeline(panel: Panel, cfg: SvyableConfig, *,
                  write_artifacts: bool = True) -> RunResult:
     data_report = panel.validate()
 
+    # Compute the factor library once and share it across the ML sleeve and the
+    # ensemble (both consumed the identical full library — recomputing doubled
+    # the per-run cost on the default ML-enabled path).
+    F = flib.compute_all(panel, cfg)
+
     # ML sleeve (optional, plugs into the ensemble as one more sleeve)
     extra = {}
     if cfg.ml_enabled:
-        F_for_ml = flib.compute_all(panel, cfg)
-        ml_score = ml_sleeve_score(F_for_ml, panel, cfg)
+        ml_score = ml_sleeve_score(F, panel, cfg)
         if ml_score is not None:
             extra["ml"] = ml_score
 
-    ens = build_ensemble(panel, cfg, extra_sleeve_scores=extra)
+    ens = build_ensemble(panel, cfg, extra_sleeve_scores=extra, factors=F)
 
     liq = panel.liquidity_mask(cfg.min_adv, cfg.min_price, cfg.adv_win)
     con = build_unit_weights(ens.score, panel.ret, liq, cfg)
