@@ -272,24 +272,27 @@ class TastytradeBroker:
         out: dict[str, dict] = {}
         for i in range(0, len(symbols), 90):
             batch = symbols[i:i + 90]
+            # per docs: comma-delimited symbol list keyed by security type
             d = self.c.request("GET", "/market-data/by-type",
-                               params={"equity[]": batch})
-            items = d.get("items", [])
-            if not items and isinstance(d, dict):     # some shapes nest by type
-                for v in d.values():
-                    if isinstance(v, list):
-                        items += v
-            for q in items:
+                               params={"equity": ",".join(batch)})
+            for q in d.get("items", []):
                 sym = q.get("symbol")
                 if not sym:
                     continue
                 bid, ask = _f(q.get("bid")), _f(q.get("ask"))
                 out[sym] = {
+                    "mark": _f(q.get("mark")),
+                    "mid": _f(q.get("mid")) or ((bid + ask) / 2 if bid and ask else None),
                     "last": _f(q.get("last")),
                     "close": _f(q.get("close")),
                     "prev_close": _f(q.get("prev-close")),
                     "bid": bid, "ask": ask,
-                    "mid": (bid + ask) / 2 if bid and ask else None,
+                    "open": _f(q.get("open")),
+                    "volume": _f(q.get("volume")),
+                    "beta": _f(q.get("beta")),
+                    "year_high": _f(q.get("year-high-price")),
+                    "year_low": _f(q.get("year-low-price")),
+                    "halted": bool(q.get("is-trading-halted", False)),
                 }
         return out
 
@@ -354,12 +357,17 @@ class TastytradeBroker:
                 "total_unrealized": round(total_unreal, 2),
                 "total_pl_day": round(total_day, 2)}
 
-    def execution_prices(self, symbols: list[str]) -> dict[str, float]:
-        """Best available price per symbol: mid > last > close > prev_close."""
+    def execution_prices(self, symbols: list[str],
+                         skip_halted: bool = True) -> dict[str, float]:
+        """Best price per symbol: mark > mid > last > close > prev_close.
+        Halted names are excluded by default — never price an order in a halt."""
         snap = self.get_market_snapshot(symbols)
         out: dict[str, float] = {}
         for sym, q in snap.items():
-            px = q.get("mid") or q.get("last") or q.get("close") or q.get("prev_close")
+            if skip_halted and q.get("halted"):
+                continue
+            px = q.get("mark") or q.get("mid") or q.get("last") \
+                or q.get("close") or q.get("prev_close")
             if px and px > 0:
                 out[sym] = float(px)
         return out

@@ -56,10 +56,13 @@ class FakeClient:
         if method == "DELETE":
             return {"status": "Cancel Requested"}
         if path.endswith("/market-data/by-type"):
+            syms = params["equity"].split(",")        # comma-delimited per docs
             return {"items": [{"symbol": s, "bid": "99.9", "ask": "100.1",
+                               "mid": "100.0", "mark": "100.0",
                                "last": "100.0", "close": "99.5",
-                               "prev-close": "98.0"}
-                              for s in params["equity[]"]]}
+                               "prev-close": "98.0", "beta": "1.2",
+                               "is-trading-halted": s == "HALT"}
+                              for s in syms]}
         if path.endswith("/instruments/equities/active"):
             return {"items": [
                 {"symbol": "AAPL", "listed-market": "XNAS"},
@@ -138,9 +141,20 @@ def test_production_guard():
 def test_market_snapshot_and_execution_prices():
     b = _broker()
     snap = b.get_market_snapshot(["MRVL", "AMD"])
-    assert snap["MRVL"]["mid"] == 100.0 and snap["AMD"]["last"] == 100.0
-    px = b.execution_prices(["MRVL"])
-    assert px["MRVL"] == 100.0                      # mid preferred
+    assert snap["MRVL"]["mark"] == 100.0 and snap["AMD"]["beta"] == 1.2
+    px = b.execution_prices(["MRVL", "HALT"])
+    assert px["MRVL"] == 100.0                      # mark preferred
+    assert "HALT" not in px                          # halted names never priced
+
+
+def test_account_streamer_parsing():
+    from svyable.account_streamer import parse_notification
+    order = parse_notification('{"type":"Order","data":{"id":1,"status":"Filled"},'
+                               '"timestamp":1688595114405}')
+    assert order["type"] == "Order" and order["data"]["status"] == "Filled"
+    ack = parse_notification('{"status":"ok","action":"connect",'
+                             '"web-socket-session-id":"5b6e2799"}')
+    assert ack["type"] == "control" and ack["status"] == "ok"
 
 
 def test_universe_snapshot_filtering():
@@ -191,6 +205,7 @@ if __name__ == "__main__":
     test_lifecycle_calls()
     test_production_guard()
     test_market_snapshot_and_execution_prices()
+    test_account_streamer_parsing()
     test_universe_snapshot_filtering()
     test_dxlink_compact_parsing()
     test_pnl_report_formulas()
