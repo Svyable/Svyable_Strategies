@@ -56,3 +56,31 @@ def submission_confirmation(
     )
     enabled = acknowledged and account == settings.account_number and phrase == f"{prefix} LIVE"
     return enabled, account
+
+
+def cancellation_confirmation(settings: TastySettings) -> tuple[bool, str]:
+    """Cancellation is risk-reducing but still requires explicit account context."""
+    if settings.is_test:
+        phrase = st.text_input(
+            "Type `CANCEL SANDBOX`",
+            key="cancel_sandbox_confirmation",
+        )
+        acknowledged = st.checkbox(
+            "I verified the order ID and want to request cancellation.",
+            key="cancel_sandbox_ack",
+        )
+        return acknowledged and phrase == "CANCEL SANDBOX", ""
+
+    st.error("PRODUCTION CANCELLATION — verify the exact order before continuing.")
+    account = st.text_input(
+        "Type the configured account number",
+        type="password",
+        key="cancel_live_account",
+    )
+    phrase = st.text_input("Type `CANCEL LIVE`", key="cancel_live_phrase")
+    acknowledged = st.checkbox(
+        "I verified the live order ID and understand this requests broker cancellation.",
+        key="cancel_live_ack",
+    )
+    enabled = acknowledged and account == settings.account_number and phrase == "CANCEL LIVE"
+    return enabled, account
