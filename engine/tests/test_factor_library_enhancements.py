@@ -6,7 +6,12 @@ correct sleeve, compute a finite cross-sectional score on a burned-in panel,
 carry the intended maturity stage, and survive the robust research harness.
 """
 
+import sys
+from pathlib import Path
+
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from svyable import factor_library as flib
 from svyable.analysis_robust import factor_report

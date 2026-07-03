@@ -185,6 +185,7 @@ def run_pipeline(
             "throttle",
             "risk_on_signal",
             "boost",
+            "regime_ready",
             "multiplier",
         ]
         writer.write_meta(

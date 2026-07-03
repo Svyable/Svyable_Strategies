@@ -122,6 +122,11 @@ class SvyableConfig:
     cash_yield_annual: float = 0.045
     kill_dd_mult: float = 1.5
     backtest_max_dd: float = 0.10
+    # circuit breaker: on breach, cut the book to kill_lev (distinct from and
+    # below lev_min, so the kill is a real de-risk, not a no-op) and stay
+    # latched until own-book drawdown recovers below kill_rearm_mult x max_dd.
+    kill_lev: float = 0.0
+    kill_rearm_mult: float = 1.0
 
     # ---- turbulence / breadth / panic regime ----
     turbulence_enabled: bool = True
@@ -142,6 +147,7 @@ class SvyableConfig:
     breadth_full: float = 0.25
     breadth_weight: float = 0.20
     panic_vol_win: int = 21
+    panic_vol_baseline_win: int = 252
     panic_vol_z_on: float = 1.0
     panic_vol_z_full: float = 3.0
     panic_dd_on: float = 0.08
@@ -150,6 +156,11 @@ class SvyableConfig:
     regime_boost_cap: float = 1.05
     regime_boost_breadth: float = 0.65
     regime_boost_turb_pct: float = 0.50
+    # exposure cap applied while the turbulence model is still in burn-in (not
+    # yet estimable). 1.0 = fail open (backtest default); set below 1.0 for a
+    # live launch on short history so the book runs light until the structural
+    # regime signal is warm.
+    regime_warmup_floor: float = 1.0
 
     # ---- costs ----
     tc_bps: float = 3.0
