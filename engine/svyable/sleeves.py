@@ -10,9 +10,9 @@ import pandas as pd
 from svyable.panel import EPS, Panel, forward_returns
 from svyable.config import SvyableConfig
 from svyable import factor_library as flib
+from svyable.factor_correlation import pairwise_corr_penalty
 from svyable.weighting import (
     composite_score,
-    factor_corr_penalty,
     ic_coverage,
     ic_matrix,
     ic_state,
@@ -61,7 +61,7 @@ def _sleeve_score(
         cfg.min_adv, cfg.min_price, cfg.adv_win
     ).astype(bool)
     array, names = stack_factors(sub)
-    penalty = factor_corr_penalty(
+    penalty = pairwise_corr_penalty(
         array,
         names,
         panel.close.index,
@@ -198,7 +198,7 @@ def build_ensemble(
     ic_health = state["mean"]
 
     array, _ = stack_factors(sleeve_scores)
-    penalty = factor_corr_penalty(
+    penalty = pairwise_corr_penalty(
         array,
         names,
         panel.close.index,
