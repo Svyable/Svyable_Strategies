@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from svyable.strategy_activation import activate_latest_selection
 from svyable.strategy_registry import registry_frame
 from svyable.strategy_selector import (
     SelectionPolicy,
@@ -92,6 +93,9 @@ class StrategySelectionService:
         path.write_text(json.dumps(payload, indent=2, sort_keys=True))
         return path
 
+    def activate_latest(self) -> dict[str, Any]:
+        return activate_latest_selection(self.output_root)
+
     def agent_prompt(self) -> str:
         board_dir = self.latest_board_dir()
         if board_dir is None:
@@ -120,8 +124,11 @@ Required schema:
   "reason": "<concise PM rationale>"
 }}
 
-The next deterministic daily run validates the date, hash, eligibility, and
-registered strategy before activating the decision.
+Then run:
+python -m svyable.strategy_activate
+
+Activation re-validates the date, board hash, eligibility, and registered
+strategy before writing the canonical Tastytrade weights.
 """
 
     def snapshot(self) -> dict[str, Any]:
