@@ -27,9 +27,9 @@ svyable/
   execution_quality.py         fills, fees, venues, and slippage
   ledger.py                    SQLite operational evidence
   streamlit_app.py             operations console
-pages/
-  1_Strategy_Selector.py       registry, policy, candidate board, activation
-  2_Factor_Governance.py       IC and factor-governance evidence
+  pages/
+    1_Strategy_Selector.py     registry, policy, candidate board, activation
+    2_Factor_Governance.py     IC and factor-governance evidence
 ```
 
 ## Setup
@@ -83,7 +83,7 @@ python -m svyable.cli --out /tmp/svyable-smoke smoke
 python -m svyable.ui
 ```
 
-The selector GUI manages registered strategies and policy. It never edits raw weights. The agent and GUI may select only an eligible candidate ID from the immutable board. Tastytrade consumes only `outputs/svyable_nasdaq_lo/<tag>/` after activation.
+The selector GUI manages registered strategies and policy, can run a fresh candidate evaluation, and exposes exact strategy recipes. It never edits raw weights. The agent and GUI may select only an eligible candidate ID from the immutable board. Tastytrade consumes only `outputs/svyable_nasdaq_lo/<tag>/` after activation.
 
 ## Safety
 
