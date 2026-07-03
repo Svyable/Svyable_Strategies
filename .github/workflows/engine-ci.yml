@@ -11,6 +11,10 @@ on:
       - "engine/**"
       - ".github/workflows/engine-ci.yml"
 
+concurrency:
+  group: engine-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
