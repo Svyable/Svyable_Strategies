@@ -133,6 +133,60 @@ def _vol_scaled_momentum(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     return formation / (vol + EPS)
 
 
+# constant from the Garman-Klass estimator: (2 ln 2 - 1)
+_GK_CO_COEF = 2.0 * float(np.log(2.0)) - 1.0
+
+
+def _gk_inv_vol(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Inverse Garman-Klass range volatility.
+
+    Close-to-close vol (the ``inv_vol`` factor) throws away the intraday path.
+    The Garman-Klass estimator uses the full OHLC bar and is ~7x more efficient
+    per observation, so the defensive tilt reacts faster with less estimation
+    noise. Per-bar variance = 0.5*ln(H/L)^2 - (2ln2-1)*ln(C/O)^2, averaged over
+    the idio window and annualized before inversion.
+    """
+    window = max(21, cfg.idio_win)
+    log_hl = np.log((panel.high / (panel.low + EPS)).clip(lower=EPS))
+    log_co = np.log((panel.close / (panel.open + EPS)).clip(lower=EPS))
+    gk_daily = 0.5 * log_hl**2 - _GK_CO_COEF * log_co**2
+    gk_var = gk_daily.rolling(window, min_periods=max(10, window // 2)).mean()
+    gk_vol = np.sqrt(gk_var.clip(lower=EPS) * 252.0)
+    return 1.0 / (gk_vol + EPS)
+
+
+def _intermediate_momentum(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Novy-Marx intermediate-horizon momentum (the 'echo').
+
+    Distinct from the canonical 12-1 signal: the return earned from t-12m to
+    t-7m predicts the cross-section better than the more recent leg, which is
+    contaminated by short-term reversal. Formation is close[t-126]/close[t-252].
+    """
+    return panel.close.shift(126) / (panel.close.shift(252) + EPS) - 1.0
+
+
+def _return_seasonality(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Heston-Sadka same-calendar-month return seasonality (shadow research).
+
+    Average of each asset's trailing-month return sampled at annual lags 1..5.
+    Genuinely orthogonal to price-trend momentum, but higher-variance on daily
+    bars — carried as shadow, no guaranteed floor, until IC evidence accrues.
+    Missing years are dropped per name rather than imputed to zero.
+    """
+    horizon = 21
+    total: pd.DataFrame | None = None
+    count: pd.DataFrame | None = None
+    for year in range(1, 6):
+        lag = 252 * year
+        seasonal = panel.close.shift(lag) / (panel.close.shift(lag + horizon) + EPS) - 1.0
+        present = seasonal.notna()
+        contribution = seasonal.where(present, 0.0)
+        total = contribution if total is None else total.add(contribution)
+        indicator = present.astype(float)
+        count = indicator if count is None else count.add(indicator)
+    return total.div(count.replace(0.0, np.nan))
+
+
 def register_extensions() -> None:
     _register(
         "inv_idio",
@@ -197,6 +251,30 @@ def register_extensions() -> None:
         proven=False,
         lineage="risk-managed momentum adaptation",
         description="Classic skipped momentum divided by trailing realized volatility.",
+    )
+    _register(
+        "gk_inv_vol",
+        "defensive",
+        _gk_inv_vol,
+        proven=True,
+        lineage="Garman-Klass OHLC range volatility estimator",
+        description="Inverse annualized Garman-Klass range volatility.",
+    )
+    _register(
+        "intermediate_momentum",
+        "momentum",
+        _intermediate_momentum,
+        proven=True,
+        lineage="Novy-Marx intermediate-horizon momentum ('echo')",
+        description="Return from t-12m to t-7m, skipping the recent leg.",
+    )
+    _register(
+        "return_seasonality",
+        "momentum",
+        _return_seasonality,
+        proven=False,
+        lineage="Heston-Sadka return seasonality",
+        description="Same-calendar-month trailing return averaged over annual lags 1-5.",
     )
 
 
