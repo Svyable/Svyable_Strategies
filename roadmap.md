@@ -28,7 +28,7 @@ Build the portable package that strategy.md specifies. This is a rewrite-by-extr
 
 ## Phase 2 — Paper loop  [+2 → +4 months]
 
-1. Alpaca (or broker-sandbox) adapter + `rebalancer.py` (target weights × equity vs positions → orders with ADV spill-over).
+1. tastytrade sandbox adapter + `rebalancer.py` (target weights × equity vs positions → orders with ADV spill-over).
 2. The full daily loop (strategy.md §7) on a scheduler: ingest → validate → compute → persist → diff → gate → execute → reconcile → report. Every step alerting on failure; a missed run is a paged incident, not a silent skip.
 3. Run `svyable_nasdaq_lo` on paper for ≥ 60 trading days. Measure: implementation shortfall per fill (seeds the real TC model), live-vs-shadow-backtest tracking (±30bps/day target), operational uptime.
 4. Retune the smoothing/TC-gate stack against *measured* paper costs (the +4%/yr unlock from strategy.md §11.2 #4 gets sized honestly here).

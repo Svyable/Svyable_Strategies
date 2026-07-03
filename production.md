@@ -40,24 +40,23 @@ This doc defines what "operationally trustworthy" means, what is built, and the 
 | Order audit chain | rebalancer logs every plan+result to JSON and ledger | BUILT |
 | Pre-trade checks | long-only guard, lev_cap check, ADV participation caps, dust filter | BUILT |
 | Reconciliation | post-fill drift report, warnings into ledger | BUILT |
-| Order lifecycle | fill polling, partial fills, retries, MOC/limit types | PARTIAL — tastytrade adapter has per-order fill polling, limit orders, cancel/replace; Alpaca still fire-and-forget |
+| Order lifecycle | fill polling, partial fills, retries, MOC/limit types | PARTIAL — tastytrade adapter has per-order fill polling, limit orders, cancel/replace |
 | Pre-trade broker validation | tastytrade dry-run endpoint: every order validated (buying power + fees) before submission; warnings ⇒ not submitted | **BUILT** (`tastytrade.py`, dry-run gated by construction) |
 | tastytrade adapter | OAuth2 (15-min tokens, auto-refresh) + sandbox session auth; sandbox default, production requires TT_ENV=production AND code-level `allow_production=True`; CLI: `svyable tasty status\|orders\|cancel\|dry-run`, `rebalance --broker tasty` | BUILT + offline-tested (mock transport) |
 | Account-based kill switch | live rule on actual account equity, not backtest curve | TODO (with lifecycle work) |
 
 ## Gates to capital (hard, pre-committed)
 
-- **Gate A — paper autopilot on**: golden+causality suites green; Massive key live; cross-provider check running; Alpaca paper keys set. Then the daily loop auto-submits to Alpaca paper.
+- **Gate A — paper autopilot on**: golden+causality suites green; Massive key live; cross-provider check running; tastytrade sandbox session live. Then the daily loop auto-submits to tastytrade sandbox.
 - **Gate B — 60 clean paper days**: ≥90% of days |drift| ≤ 30bps; zero unexplained reconcile drifts; heartbeat uptime ≥ 98%; PIT-universe backtest re-run and walkforward still ROBUST.
-- **Gate C — first live dollars**: order-lifecycle + account kill switch built and fire-drilled; measured Alpaca fill costs fed back into `tc_bps`; human sign-off on the Gate-B report.
+- **Gate C — first live dollars**: order-lifecycle + account kill switch built and fire-drilled; measured tastytrade fill costs fed back into `tc_bps`; human sign-off on the Gate-B report.
 
 ## Broker lineup
 
 | Broker | Role | Auth (env vars) | State |
 |---|---|---|---|
 | LocalPaperBroker | offline testing, CI | none | live |
-| Alpaca (paper) | commission-free paper autopilot candidate | `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY` | built, needs keys |
-| tastytrade (sandbox) | dry-run-validated execution; the richest pre-trade checks | OAuth: `TT_CLIENT_ID`/`TT_CLIENT_SECRET`/`TT_REFRESH_TOKEN`; or sandbox `TT_USERNAME`/`TT_PASSWORD`; optional `TT_ACCOUNT` | built, needs sandbox account |
+| tastytrade (sandbox) | canonical data + broker provider; dry-run-validated execution; the richest pre-trade checks | OAuth: `TT_CLIENT_ID`/`TT_CLIENT_SECRET`/`TT_REFRESH_TOKEN`; or sandbox `TT_USERNAME`/`TT_PASSWORD`; optional `TT_ACCOUNT` | built, needs sandbox account |
 | tastytrade (production) | live capital at Gate C | same + `TT_ENV=production` + code-level opt-in | gated |
 
 ## Next-session queue (in order) — tastytrade-primary
@@ -66,4 +65,4 @@ This doc defines what "operationally trustworthy" means, what is built, and the 
 3. Cross-provider last-close check (yf vs tastytrade snapshot) in `cmd_daily`; wire universe snapshot into the daily loop.
 4. Account streamer websocket (order-status push instead of per-id polling) + account-equity kill switch.
 5. HTML dashboard generated from the ledger.
-6. Gate A: tastytrade sandbox is the paper-autopilot default (one vendor for data + broker); Alpaca stays as the backup adapter.
+6. Gate A: tastytrade sandbox is the paper-autopilot default (one vendor for data + broker); LocalPaperBroker remains the offline/CI adapter.

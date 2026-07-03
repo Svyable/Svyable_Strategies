@@ -3,11 +3,12 @@
 Ships with:
 - LocalPaperBroker — JSON-state paper account, zero network. The CI/testing
   adapter and the default until real keys exist.
-- AlpacaBroker — Alpaca Trading API v2 (paper by default). Keys via env
-  ALPACA_KEY_ID / ALPACA_SECRET_KEY; never stored in code or config.
+
+Tastytrade is the canonical data + broker provider; its adapter lives in
+tastytrade.py / tastytrade_sdk.py.
 
 Safety invariants:
-- default endpoint is the PAPER host; live requires alpaca_live=True explicitly
+- Tastytrade defaults to the sandbox host; live requires an explicit opt-in
 - this module only translates orders; sizing/caps happen in rebalancer.py
 """
 
