@@ -1,11 +1,8 @@
 """Canonical weekday runner for the multi-strategy PM loop.
 
-Usage:
-    python -m svyable.strategy_daily --start 2020-01-01
-
-The runner refreshes one shared market panel, evaluates all enabled registered
-strategies, applies the persisted selection policy, and writes one canonical
-portfolio for the Tastytrade execution workflow.
+The runner refreshes one shared market panel and evaluates all enabled strategy
+recipes. Deterministic/manual policies activate immediately. Agent mode emits an
+immutable candidate board and waits for ``python -m svyable.strategy_activate``.
 """
 
 from __future__ import annotations
@@ -19,6 +16,7 @@ from pathlib import Path
 from svyable.calendar import expected_last_close, is_trading_day
 from svyable.ledger import Ledger
 from svyable.providers import TastytradeProvider, YFinanceProvider
+from svyable.strategy_activation import activate_latest_selection
 from svyable.strategy_selector import load_policy, run_strategy_selection
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,9 +86,19 @@ def run(args) -> int:
             panel,
             args.out,
             policy=policy,
-            activate=True,
+            activate=False,
         )
-        decision = selection.decision
+
+        awaiting_agent = policy.mode == "agent" or args.evaluate_only
+        if awaiting_agent:
+            decision = selection.decision
+            status = "awaiting_agent" if policy.mode == "agent" else "evaluated"
+            canonical_output = None
+        else:
+            decision = activate_latest_selection(args.out)
+            status = report["status"]
+            canonical_output = decision["canonical_output_dir"]
+
         strategy_id = str(decision["strategy_id"])
         selected_result = selection.candidate_results.get(strategy_id)
         shadow_nav = None
@@ -100,12 +108,13 @@ def run(args) -> int:
                 .cumprod()
                 .iloc[-1]
             )
-            ledger.record_equity(str(observed), shadow_nav=shadow_nav)
+            if not awaiting_agent:
+                ledger.record_equity(str(observed), shadow_nav=shadow_nav)
 
         ledger.record_run(
             kind="daily_selection",
             strategy="svyable_nasdaq_lo",
-            status=report["status"],
+            status=status,
             data_last_date=str(observed),
             data_status=report["status"],
             metrics={
@@ -118,12 +127,14 @@ def run(args) -> int:
                 "candidate_set_hash": decision.get("candidate_set_hash"),
                 "candidate_count": len(selection.board) - 1,
                 "shadow_nav": shadow_nav,
+                "awaiting_agent": awaiting_agent,
             },
-            output_dir=str(selection.canonical_output_dir or ""),
+            output_dir=str(canonical_output or selection.board_dir),
         )
 
-        print(json.dumps({
-            "selected_strategy_id": strategy_id,
+        output = {
+            "status": status,
+            "recommended_strategy_id": strategy_id,
             "action": decision["action"],
             "source": decision.get("source"),
             "reason": decision.get("reason"),
@@ -131,15 +142,22 @@ def run(args) -> int:
             "one_way_turnover": decision.get("one_way_turnover"),
             "estimated_cost_bps": decision.get("estimated_cost_bps"),
             "candidate_board": str(selection.board_dir / "candidate_board.csv"),
-            "canonical_output": str(selection.canonical_output_dir),
-        }, indent=2, default=str))
+            "canonical_output": canonical_output,
+        }
+        if policy.mode == "agent":
+            output["next_step"] = (
+                "Review the board, write strategy_selection/agent_decision.json, "
+                "then run `python -m svyable.strategy_activate`."
+            )
+        print(json.dumps(output, indent=2, default=str))
 
-        try:
-            from svyable.dashboard import generate
+        if not awaiting_agent:
+            try:
+                from svyable.dashboard import generate
 
-            print(f"dashboard: {generate(args.out, env=args.env)}")
-        except Exception as exc:
-            print(f"WARNING: dashboard generation failed ({exc})", file=sys.stderr)
+                print(f"dashboard: {generate(args.out, env=args.env)}")
+            except Exception as exc:
+                print(f"WARNING: dashboard generation failed ({exc})", file=sys.stderr)
         return 0
     finally:
         ledger.close()
@@ -155,6 +173,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--provider", choices=["yf", "tasty"], default="yf")
     result.add_argument("--strict", action="store_true")
     result.add_argument("--force", action="store_true")
+    result.add_argument(
+        "--evaluate-only",
+        action="store_true",
+        help="write the candidate board without activating canonical weights",
+    )
     return result
 
 
