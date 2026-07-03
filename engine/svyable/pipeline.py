@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -29,6 +30,7 @@ class RunResult:
     risk: RiskResult
     tag: str
     output_dir: Path | None
+    factor_names: tuple[str, ...]
 
 
 def run_pipeline(
@@ -38,10 +40,13 @@ def run_pipeline(
     output_root: str | Path | None = None,
     tag: str | None = None,
     write_artifacts: bool = True,
+    factor_names: list[str] | tuple[str, ...] | None = None,
+    run_context: dict[str, Any] | None = None,
 ) -> RunResult:
     data_report = panel.validate()
+    selected_factors = tuple(factor_names or sorted(flib.factor_metadata().index))
 
-    factors = flib.compute_all(panel, cfg)
+    factors = flib.compute_all(panel, cfg, names=list(selected_factors))
     catalog = flib.factor_metadata(factors)
 
     extra = {}
@@ -142,11 +147,13 @@ def run_pipeline(
                 "run_timestamp": datetime.now().isoformat(),
                 "config_hash": cfg.config_hash(),
                 "config": cfg.to_dict(),
+                "run_context": run_context or {},
                 "data": data_report,
                 "panel_meta": panel.meta,
                 "perf_1y_net": recent,
                 "factor_library": {
                     "count": len(catalog),
+                    "names": list(selected_factors),
                     "proven": int(stages.get("proven", 0)),
                     "shadow": int(stages.get("shadow", 0)),
                     "missing_values_preserved_for_ic": True,
@@ -176,6 +183,7 @@ def run_pipeline(
         risk=risk,
         tag=use_tag,
         output_dir=output_dir,
+        factor_names=selected_factors,
     )
 
 
@@ -197,4 +205,5 @@ def backtest_report(
         ),
         "kill_switch_days": int(result.risk.kill_switch.sum()),
         "config_hash": cfg.config_hash(),
+        "factor_count": len(result.factor_names),
     }
