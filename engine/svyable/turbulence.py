@@ -27,6 +27,15 @@ def _model_dates(index: pd.Index, window: int, step: int) -> list[int]:
     return list(range(window, len(index), step))
 
 
+def _median_abs_deviation(sample: np.ndarray) -> float:
+    """Median absolute deviation from the window's own median."""
+    finite = sample[np.isfinite(sample)]
+    if finite.size == 0:
+        return np.nan
+    center = np.median(finite)
+    return float(np.median(np.abs(finite - center)))
+
+
 def turbulence_index(
     returns: pd.DataFrame,
     *,
@@ -79,9 +88,14 @@ def turbulence_index(
                 mean, cholesky, _ = refit
         if cholesky is None or columns is None or mean is None:
             continue
-        observation = np.nan_to_num(values[t, columns] - mean, nan=0.0)
+        finite = np.isfinite(values[t, columns])
+        if not finite.any():
+            continue
+        observation = np.where(finite, values[t, columns] - mean, 0.0)
         standardized = np.linalg.solve(cholesky, observation)
-        output[t] = float(standardized @ standardized) / len(columns)
+        # normalize by the assets actually observed today, not the model width:
+        # zero-imputed halted names must not dilute a crisis reading
+        output[t] = float(standardized @ standardized) / int(finite.sum())
 
     return pd.Series(output, index=index, name="turbulence")
 
@@ -149,9 +163,20 @@ def panic_state(
         cfg.panic_vol_win,
         min_periods=max(10, cfg.panic_vol_win // 2),
     ).std() * np.sqrt(ANN)
-    baseline_mean = realized_vol.rolling(252, min_periods=126).mean()
-    baseline_std = realized_vol.rolling(252, min_periods=126).std()
-    vol_z = (realized_vol - baseline_mean) / (baseline_std + EPS)
+    # robust (median / MAD) baseline: a mean/std reference lets a months-long
+    # crisis inflate its own baseline and quietly decays the signal, exactly
+    # when the panic state should stay on. The median is unmoved until the
+    # crisis occupies more than half the trailing window.
+    baseline_win = cfg.panic_vol_baseline_win
+    min_periods = max(63, baseline_win // 2)
+    baseline_median = realized_vol.rolling(
+        baseline_win, min_periods=min_periods
+    ).median()
+    baseline_mad = realized_vol.rolling(
+        baseline_win, min_periods=min_periods
+    ).apply(_median_abs_deviation, raw=True)
+    robust_scale = 1.4826 * baseline_mad
+    vol_z = (realized_vol - baseline_median) / (robust_scale + EPS)
 
     dd_span = max(cfg.panic_dd_full - cfg.panic_dd_on, 1e-6)
     vol_span = max(cfg.panic_vol_z_full - cfg.panic_vol_z_on, 1e-6)
@@ -244,7 +269,20 @@ def regime_frame(returns: pd.DataFrame, cfg: SvyableConfig) -> pd.DataFrame:
         * (1.0 - panic_signal.fillna(0.0))
     ).fillna(0.0)
     boost = 1.0 + max(0.0, cfg.regime_boost_cap - 1.0) * risk_on_signal
-    multiplier = (throttle * boost).clip(cfg.turb_floor, cfg.regime_boost_cap)
+
+    # readiness: the structural turbulence signal is the slowest to warm, so it
+    # gates whether the regime stack is trustworthy. Before it is estimable the
+    # composite is driven only by the faster breadth/panic components and the
+    # book may optionally be held light via regime_warmup_floor.
+    regime_ready = turbulence.notna()
+    warmup_floor = float(cfg.regime_warmup_floor)
+    lower_bound = min(cfg.turb_floor, warmup_floor)
+    warmup_cap = np.where(regime_ready.to_numpy(), cfg.regime_boost_cap, warmup_floor)
+    multiplier = (throttle * boost).clip(lower_bound, cfg.regime_boost_cap)
+    multiplier = pd.Series(
+        np.minimum(multiplier.to_numpy(), warmup_cap),
+        index=multiplier.index,
+    ).clip(lower_bound, cfg.regime_boost_cap)
 
     return pd.concat(
         [
@@ -261,6 +299,7 @@ def regime_frame(returns: pd.DataFrame, cfg: SvyableConfig) -> pd.DataFrame:
             throttle.rename("throttle"),
             risk_on_signal.rename("risk_on_signal"),
             boost.rename("boost"),
+            regime_ready.astype(float).rename("regime_ready"),
             multiplier.rename("multiplier"),
         ],
         axis=1,
