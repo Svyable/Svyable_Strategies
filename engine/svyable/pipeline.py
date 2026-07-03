@@ -41,12 +41,21 @@ def run_pipeline(
     tag: str | None = None,
     write_artifacts: bool = True,
     factor_names: list[str] | tuple[str, ...] | None = None,
+    precomputed_factors: dict[str, pd.DataFrame] | None = None,
     run_context: dict[str, Any] | None = None,
 ) -> RunResult:
     data_report = panel.validate()
     selected_factors = tuple(factor_names or sorted(flib.factor_metadata().index))
 
-    factors = flib.compute_all(panel, cfg, names=list(selected_factors))
+    if precomputed_factors is None:
+        factors = flib.compute_all(panel, cfg, names=list(selected_factors))
+    else:
+        missing = [name for name in selected_factors if name not in precomputed_factors]
+        if missing:
+            raise ValueError(
+                "Precomputed factor cache is missing: " + ", ".join(missing)
+            )
+        factors = {name: precomputed_factors[name] for name in selected_factors}
     catalog = flib.factor_metadata(factors)
 
     extra = {}
@@ -158,6 +167,7 @@ def run_pipeline(
                     "shadow": int(stages.get("shadow", 0)),
                     "missing_values_preserved_for_ic": True,
                     "tradable_universe_ic": True,
+                    "precomputed_cache": precomputed_factors is not None,
                 },
                 "execution_inputs": {
                     "date": str(last.date() if hasattr(last, "date") else last),
