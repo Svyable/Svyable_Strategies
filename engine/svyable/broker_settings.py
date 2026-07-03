@@ -44,10 +44,32 @@ class TastySettings:
     audit_path: Path = Path("outputs/audit/tastytrade.jsonl")
     slippage_warn_bps: float = 15.0
     slippage_critical_bps: float = 30.0
+    # Used only by the one-time OAuth authorization-code exchange (`svyable auth`),
+    # not by the daily refresh-token grant — so they are never required credentials.
+    client_id: str = ""
+    redirect_uri: str = ""
 
     @property
     def environment(self) -> str:
         return "sandbox" if self.is_test else "production"
+
+    @property
+    def api_base(self) -> str:
+        """REST + token host for the selected environment."""
+        return (
+            "https://api.cert.tastyworks.com"
+            if self.is_test
+            else "https://api.tastyworks.com"
+        )
+
+    @property
+    def authorize_url(self) -> str:
+        """Human login page where the user grants the app (Duo 2FA happens here)."""
+        return (
+            "https://cert-my.staging-tasty.works/auth.html"
+            if self.is_test
+            else "https://my.tastytrade.com/auth.html"
+        )
 
     @classmethod
     def from_env(cls, *, require_credentials: bool = True) -> "TastySettings":
@@ -56,6 +78,8 @@ class TastySettings:
         client_secret = _first_env("TASTY_CLIENT_SECRET", "TT_CLIENT_SECRET")
         refresh_token = _first_env("TASTY_REFRESH_TOKEN", "TT_REFRESH_TOKEN")
         account_number = _first_env("TASTY_ACCOUNT_NUMBER", "TT_ACCOUNT")
+        client_id = _first_env("TASTY_CLIENT_ID", "TT_CLIENT_ID")
+        redirect_uri = _first_env("TASTY_REDIRECT_URI", "TT_REDIRECT_URI")
 
         explicit_test = os.getenv("TASTY_IS_TEST")
         if explicit_test is None:
@@ -99,4 +123,6 @@ class TastySettings:
             audit_path=audit_path,
             slippage_warn_bps=warn_bps,
             slippage_critical_bps=critical_bps,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
         )

@@ -262,6 +262,25 @@ def cmd_health(args) -> int:
     return 0
 
 
+def cmd_auth(args) -> int:
+    """One-time interactive Tastytrade OAuth onboarding (writes refresh token to .env)."""
+    from svyable.oauth import authorize
+
+    env_path = Path(args.env_file) if args.env_file else ROOT / ".env"
+    try:
+        summary = authorize(env_path, open_browser=not args.no_browser, scope=args.scope)
+    except Exception as exc:  # noqa: BLE001 — surface a clean message, no secret leakage
+        print(f"authorization failed: {exc}", file=sys.stderr)
+        return 2
+    print("\nauthorized:")
+    print(json.dumps(summary, indent=2))
+    print(
+        "\nThe daily loop now refreshes access tokens silently — no further 2FA "
+        "until the refresh token is revoked or expires."
+    )
+    return 0
+
+
 def cmd_tasty(args) -> int:
     from svyable.tastytrade import TastytradeBroker
     b = TastytradeBroker()   # sandbox by default; production needs code-level opt-in
@@ -456,12 +475,20 @@ def main(argv=None) -> int:
     sub.add_parser("session")
     sub.add_parser("dashboard")
 
+    au = sub.add_parser("auth", help="one-time Tastytrade OAuth onboarding -> .env")
+    au.add_argument("--env-file", default=None, help="path to .env (default engine/.env)")
+    au.add_argument("--scope", default="read",
+                    help="OAuth scope. Default 'read' mints a token that physically "
+                         "cannot trade. Use --scope 'read trade' only at go-live.")
+    au.add_argument("--no-browser", action="store_true",
+                    help="print the URL instead of opening a browser")
+
     args = p.parse_args(argv)
     _apply_env(args)
     return {"fetch": cmd_fetch, "daily": cmd_daily, "backtest": cmd_backtest,
             "factors": cmd_factors, "walkforward": cmd_walkforward,
             "rebalance": cmd_rebalance, "smoke": cmd_smoke, "health": cmd_health,
-            "universe": cmd_universe, "tasty": cmd_tasty,
+            "universe": cmd_universe, "tasty": cmd_tasty, "auth": cmd_auth,
             "session": cmd_session, "dashboard": cmd_dashboard}[args.cmd](args)
 
 
