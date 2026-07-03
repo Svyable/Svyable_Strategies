@@ -226,6 +226,88 @@ def test_agent_selects_blend_and_activation_is_canonical():
         assert state["selected_strategy_id"] == "chimera_agent_mix"
 
 
+def test_service_custom_blend_lifecycle_and_pending_proposal():
+    from svyable.strategy_selection_service import StrategySelectionService
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        service = StrategySelectionService(root)
+
+        # invalid definitions must be rejected before touching the policy
+        try:
+            service.add_custom_blend({
+                "blend_id": "chimera_bad",
+                "components": {"q23_hybrid_alpha": 0.9, "q23_low_turnover": 0.2},
+            })
+            raise AssertionError("accepted weights that do not sum to 1")
+        except ValueError:
+            pass
+
+        service.add_custom_blend({
+            "blend_id": "chimera_svc_mix",
+            "display_name": "Service Mix",
+            "components": {"q23_hybrid_alpha": 0.5, "q23_low_turnover": 0.5},
+        })
+        assert any(
+            item["blend_id"] == "chimera_svc_mix"
+            for item in service.policy().custom_blends
+        )
+        # saving again replaces, not duplicates
+        service.add_custom_blend({
+            "blend_id": "chimera_svc_mix",
+            "display_name": "Service Mix v2",
+            "components": {"q23_hybrid_alpha": 0.6, "q23_low_turnover": 0.4},
+        })
+        entries = [
+            item for item in service.policy().custom_blends
+            if item["blend_id"] == "chimera_svc_mix"
+        ]
+        assert len(entries) == 1 and entries[0]["components"]["q23_hybrid_alpha"] == 0.6
+        service.remove_custom_blend("chimera_svc_mix")
+        assert not service.policy().custom_blends
+
+        # pending proposal surfaces only while unactivated and board-fresh
+        assert service.pending_agent_decision() == {}
+        policy = _permissive(
+            mode="agent",
+            custom_blends=(
+                {
+                    "blend_id": "chimera_agent_mix",
+                    "display_name": "Agent Mix",
+                    "components": {"q23_hybrid_alpha": 0.5, "q23_low_turnover": 0.5},
+                },
+            ),
+        )
+        save_policy(root, policy)
+        selection = run_strategy_selection(
+            _panel(), root, policy=policy, tag="svc_pending", activate=False
+        )
+        board = selection.board.set_index("candidate_id")
+        agent_decision_path(root).write_text(json.dumps({
+            "as_of": str(board.iloc[0]["as_of"]),
+            "candidate_set_hash": str(board.iloc[0]["candidate_set_hash"]),
+            "candidate_id": "chimera_agent_mix",
+            "confidence": 0.7,
+            "reason": "Diversified blend beats each component after costs.",
+        }))
+        pending = service.pending_agent_decision()
+        assert pending["candidate_id"] == "chimera_agent_mix"
+        assert pending["eligible"] is True
+        assert json.loads(pending["components"]) == {
+            "q23_hybrid_alpha": 0.5,
+            "q23_low_turnover": 0.5,
+        }
+
+        # regime diagnostics exist because candidate runs write them
+        regime = service.latest_regime()
+        assert not regime.empty and "throttle" in regime.columns
+
+        activate_latest_selection(root)
+        assert service.pending_agent_decision() == {}, (
+            "an activated proposal must no longer show as pending"
+        )
+
+
 if __name__ == "__main__":
     test_preset_blends_are_valid_and_complete()
     test_blend_spec_validation_rejects_bad_definitions()
@@ -233,4 +315,5 @@ if __name__ == "__main__":
     test_inverse_vol_weights_are_clamped_and_deterministic()
     test_active_blend_enforces_its_hold_lock()
     test_agent_selects_blend_and_activation_is_canonical()
+    test_service_custom_blend_lifecycle_and_pending_proposal()
     print("STRATEGY BLEND TESTS PASSED")
