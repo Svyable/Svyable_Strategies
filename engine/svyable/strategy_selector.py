@@ -1,16 +1,14 @@
-"""Daily multi-strategy evaluation and canonical portfolio selection.
+"""Daily multi-strategy evaluation and cost-aware portfolio selection.
 
 Deterministic code computes every candidate portfolio and its decision metrics.
-A human or agent may select only from the emitted candidate board. The selected
-portfolio is copied into the canonical ``svyable_nasdaq_lo`` artifact path used
-by the Tastytrade execution layer.
+A human or agent may choose only from the immutable candidate board. Activation
+is a separate validated step that writes the one canonical Tastytrade portfolio.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -19,6 +17,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from svyable import factor_library as flib
+from svyable.config import SvyableConfig
 from svyable.panel import EPS, Panel
 from svyable.pipeline import RunResult, run_pipeline
 from svyable.strategy_registry import (
@@ -28,6 +28,15 @@ from svyable.strategy_registry import (
 )
 
 CANONICAL_STRATEGY_ID = "svyable_nasdaq_lo"
+
+_FACTOR_CONFIG_FIELDS = (
+    "beta_win", "idio_win", "down_win", "mom_win", "mom_short", "mom_long",
+    "rev_win", "ema_fast", "ema_slow", "ou_short_win", "ou_med_win",
+    "ou_halflife_min", "ou_halflife_max", "ofi_short_win", "ofi_med_win",
+    "ofi_long_win", "vpin_win", "impact_win", "attention_win",
+    "disposition_win", "efficiency_win", "persistence_win", "skew_win",
+    "kurt_win", "vov_win",
+)
 
 
 @dataclass(frozen=True)
@@ -50,8 +59,12 @@ class SelectionPolicy:
     def validate(self) -> None:
         if self.mode not in {"deterministic", "agent", "manual"}:
             raise ValueError("selection mode must be deterministic, agent, or manual")
+        if not self.enabled_strategy_ids:
+            raise ValueError("at least one strategy must be enabled")
         if not 0 < self.max_one_way_turnover <= 1.0:
             raise ValueError("max_one_way_turnover must be in (0, 1]")
+        if self.alpha_min_history < 10:
+            raise ValueError("alpha_min_history must be at least 10")
         for strategy_id in self.enabled_strategy_ids:
             get_strategy(strategy_id)
         if self.mode == "manual":
@@ -163,16 +176,15 @@ def _portfolio_expected_alpha(
         (x * x).sum(axis=1, min_count=1) + EPS
     )
     slope_history = slopes.dropna()
+    slope_hat = 0.0
     if len(slope_history) >= policy.alpha_min_history:
-        slope_hat = float(
-            slope_history.ewm(
-                halflife=policy.alpha_halflife,
-                min_periods=policy.alpha_min_history,
-                adjust=False,
-            ).mean().dropna().iloc[-1]
-        )
-    else:
-        slope_hat = 0.0
+        smoothed = slope_history.ewm(
+            halflife=policy.alpha_halflife,
+            min_periods=policy.alpha_min_history,
+            adjust=False,
+        ).mean().dropna()
+        if len(smoothed):
+            slope_hat = float(smoothed.iloc[-1])
 
     latest_score = score.ffill().iloc[-1]
     aligned_weights, aligned_score = _align_weights(weights, latest_score)
@@ -184,29 +196,45 @@ def _portfolio_expected_alpha(
     ).iloc[:-1].dropna()
     realized = 0.0
     if len(active) >= policy.alpha_min_history:
-        realized = float(
-            active.ewm(
-                halflife=policy.alpha_halflife,
-                min_periods=policy.alpha_min_history,
-                adjust=False,
-            ).mean().dropna().iloc[-1]
-        )
+        smoothed_active = active.ewm(
+            halflife=policy.alpha_halflife,
+            min_periods=policy.alpha_min_history,
+            adjust=False,
+        ).mean().dropna()
+        if len(smoothed_active):
+            realized = float(smoothed_active.iloc[-1])
 
     observations = int(len(slope_history))
     confidence = min(1.0, observations / max(1.0, 2.0 * policy.alpha_min_history))
     expected = confidence * (0.70 * cross_sectional + 0.30 * realized)
-    expected = float(np.clip(expected, -0.01, 0.01))
-    return expected, confidence, observations
+    return float(np.clip(expected, -0.01, 0.01)), confidence, observations
 
 
-def _recent_risk(result: RunResult) -> tuple[float, float]:
-    returns = result.pnl["net_ret"].dropna().tail(126)
-    if returns.empty:
-        return 0.0, 0.0
-    vol = float(returns.tail(63).std() * np.sqrt(252.0))
-    nav = (1.0 + returns).cumprod()
-    drawdown = float((1.0 - nav / nav.cummax()).max())
-    return vol, drawdown
+def _recent_metrics(result: RunResult) -> dict[str, float]:
+    returns = result.pnl["net_ret"].dropna()
+    recent = returns.tail(252)
+    if recent.empty:
+        return {
+            "recent_vol": 0.0,
+            "recent_max_drawdown": 0.0,
+            "return_63d": 0.0,
+            "return_252d": 0.0,
+            "sharpe_252d": 0.0,
+            "avg_one_way_turnover_63d": 0.0,
+        }
+    nav = (1.0 + recent).cumprod()
+    vol = float(recent.tail(63).std() * np.sqrt(252.0))
+    mean = float(recent.mean())
+    std = float(recent.std())
+    turnover = result.pnl.get("turnover", pd.Series(dtype=float)).tail(63)
+    return {
+        "recent_vol": vol,
+        "recent_max_drawdown": float((1.0 - nav / nav.cummax()).max()),
+        "return_63d": float((1.0 + recent.tail(63)).prod() - 1.0),
+        "return_252d": float((1.0 + recent).prod() - 1.0),
+        "sharpe_252d": mean / (std + EPS) * np.sqrt(252.0),
+        "avg_one_way_turnover_63d": float(turnover.mean() / 2.0) if len(turnover) else 0.0,
+    }
 
 
 def _days_since(value: str | None, as_of: date) -> int:
@@ -218,6 +246,28 @@ def _days_since(value: str | None, as_of: date) -> int:
         return 10_000
 
 
+def _factor_signature(cfg: SvyableConfig) -> tuple[Any, ...]:
+    return tuple(getattr(cfg, field) for field in _FACTOR_CONFIG_FIELDS)
+
+
+def _factor_caches(
+    panel: Panel,
+    specs: list[StrategySpec],
+) -> dict[str, dict[str, pd.DataFrame]]:
+    grouped: dict[tuple[Any, ...], list[StrategySpec]] = {}
+    for spec in specs:
+        grouped.setdefault(_factor_signature(spec.build_config()), []).append(spec)
+
+    caches: dict[str, dict[str, pd.DataFrame]] = {}
+    for group in grouped.values():
+        representative = group[0].build_config()
+        union = sorted({name for spec in group for name in spec.factor_names})
+        cache = flib.compute_all(panel, representative, names=union)
+        for spec in group:
+            caches[spec.strategy_id] = cache
+    return caches
+
+
 def _candidate_row(
     spec: StrategySpec,
     result: RunResult,
@@ -227,39 +277,56 @@ def _candidate_row(
     state: dict[str, Any],
     policy: SelectionPolicy,
     as_of: date,
+    current_source: str,
 ) -> dict[str, Any]:
     target = result.weights.iloc[-1].astype(float)
     target.index = target.index.astype(str)
-    turnover = _one_way_turnover(target, current)
+    target_aligned, current_aligned = _align_weights(target, current)
+    delta = target_aligned - current_aligned
+    turnover = float(delta.abs().sum() / 2.0)
+    max_change = float(delta.abs().max()) if len(delta) else 0.0
     expected, confidence, observations = _portfolio_expected_alpha(
         result, panel, target, policy
     )
-    vol, drawdown = _recent_risk(result)
+    metrics = _recent_metrics(result)
     cfg = spec.build_config()
     estimated_cost_bps = turnover * 2.0 * cfg.tc_bps
     turnover_penalty = turnover * policy.turnover_penalty_bps
-    risk_penalty_bps = max(0.0, vol - cfg.target_vol) * 10_000.0 * policy.risk_penalty_scale
+    risk_penalty_bps = (
+        max(0.0, metrics["recent_vol"] - cfg.target_vol)
+        * 10_000.0
+        * policy.risk_penalty_scale
+    )
     expected_alpha_bps = expected * 10_000.0
     net_alpha_bps = expected_alpha_bps - estimated_cost_bps
     utility_bps = net_alpha_bps - turnover_penalty - risk_penalty_bps
     same_strategy = spec.strategy_id == current_strategy_id
     held_days = _days_since(state.get("selected_at"), as_of) if same_strategy else 0
-    since_rebalance = _days_since(state.get("last_rebalanced_at"), as_of) if same_strategy else 10_000
+    since_rebalance = (
+        _days_since(state.get("last_rebalanced_at"), as_of)
+        if same_strategy else 10_000
+    )
     cadence_due = (not same_strategy) or since_rebalance >= spec.rebalance_interval_days
+    current_spec = (
+        get_strategy(current_strategy_id)
+        if current_strategy_id and current_strategy_id != "cash"
+        else None
+    )
     hold_lock = bool(
-        current_strategy_id
+        current_spec
         and not same_strategy
-        and _days_since(state.get("selected_at"), as_of) < get_strategy(current_strategy_id).minimum_hold_days
+        and _days_since(state.get("selected_at"), as_of) < current_spec.minimum_hold_days
     )
     kill_switch = bool(result.risk.kill_switch.iloc[-1] > 0)
+    rebalance_required = bool(max_change >= cfg.no_trade_band or turnover > 1e-6)
     eligible = bool(
         not kill_switch
         and not hold_lock
         and cadence_due
+        and rebalance_required
         and turnover <= policy.max_one_way_turnover
         and net_alpha_bps >= policy.min_expected_net_alpha_bps
     )
-    current_aligned, target_aligned = _align_weights(current, target)
     overlap = float(np.minimum(current_aligned.abs(), target_aligned.abs()).sum())
     return {
         "candidate_id": spec.strategy_id,
@@ -275,14 +342,15 @@ def _candidate_row(
         "alpha_confidence": round(confidence, 3),
         "alpha_observations": observations,
         "one_way_turnover": round(turnover, 5),
+        "max_weight_change": round(max_change, 5),
         "estimated_cost_bps": round(estimated_cost_bps, 3),
         "turnover_penalty_bps": round(turnover_penalty, 3),
         "risk_penalty_bps": round(risk_penalty_bps, 3),
         "net_expected_alpha_bps": round(net_alpha_bps, 3),
         "utility_bps": round(utility_bps, 3),
-        "recent_vol": round(vol, 5),
-        "recent_max_drawdown": round(drawdown, 5),
         "current_overlap": round(overlap, 5),
+        "current_position_source": current_source,
+        "rebalance_required": rebalance_required,
         "cadence_due": cadence_due,
         "hold_lock": hold_lock,
         "kill_switch": kill_switch,
@@ -292,6 +360,7 @@ def _candidate_row(
         "minimum_hold_days": spec.minimum_hold_days,
         "rebalance_interval_days": spec.rebalance_interval_days,
         "output_dir": str(result.output_dir or ""),
+        **{key: round(value, 5) for key, value in metrics.items()},
     }
 
 
@@ -301,16 +370,24 @@ def _hold_row(
     candidate_results: dict[str, RunResult],
     panel: Panel,
     policy: SelectionPolicy,
+    current_source: str,
 ) -> dict[str, Any]:
     expected = confidence = 0.0
     observations = 0
-    vol = drawdown = 0.0
+    metrics = {
+        "recent_vol": 0.0,
+        "recent_max_drawdown": 0.0,
+        "return_63d": 0.0,
+        "return_252d": 0.0,
+        "sharpe_252d": 0.0,
+        "avg_one_way_turnover_63d": 0.0,
+    }
     if current_strategy_id in candidate_results:
         result = candidate_results[current_strategy_id]
         expected, confidence, observations = _portfolio_expected_alpha(
             result, panel, current, policy
         )
-        vol, drawdown = _recent_risk(result)
+        metrics = _recent_metrics(result)
     expected_bps = expected * 10_000.0
     return {
         "candidate_id": "hold_current",
@@ -326,14 +403,15 @@ def _hold_row(
         "alpha_confidence": round(confidence, 3),
         "alpha_observations": observations,
         "one_way_turnover": 0.0,
+        "max_weight_change": 0.0,
         "estimated_cost_bps": 0.0,
         "turnover_penalty_bps": 0.0,
         "risk_penalty_bps": 0.0,
         "net_expected_alpha_bps": round(expected_bps, 3),
         "utility_bps": round(expected_bps, 3),
-        "recent_vol": round(vol, 5),
-        "recent_max_drawdown": round(drawdown, 5),
         "current_overlap": float(current.abs().sum()),
+        "current_position_source": current_source,
+        "rebalance_required": False,
         "cadence_due": False,
         "hold_lock": False,
         "kill_switch": False,
@@ -343,6 +421,7 @@ def _hold_row(
         "minimum_hold_days": 0,
         "rebalance_interval_days": 0,
         "output_dir": "",
+        **{key: round(value, 5) for key, value in metrics.items()},
     }
 
 
@@ -367,19 +446,24 @@ def _deterministic_choice(board: pd.DataFrame, policy: SelectionPolicy) -> dict[
         reason = "No rebalance candidate passed eligibility gates."
     else:
         best = eligible.sort_values("utility_bps", ascending=False).iloc[0]
-        buffer_bps = (
-            policy.rebalance_buffer_bps
-            if bool(best["is_current_strategy"])
-            else policy.switch_buffer_bps
-        )
-        if float(best["utility_bps"]) >= float(hold["utility_bps"]) + buffer_bps:
+        no_current_portfolio = str(hold["strategy_id"]) == "cash"
+        if no_current_portfolio or not policy.fallback_to_current:
             chosen = best
-            reason = (
-                f"Highest eligible utility exceeded hold by at least {buffer_bps:.2f} bps."
-            )
+            reason = "Selected the highest eligible utility candidate."
         else:
-            chosen = hold
-            reason = "Best candidate did not clear the cost-aware hold buffer."
+            buffer_bps = (
+                policy.rebalance_buffer_bps
+                if bool(best["is_current_strategy"])
+                else policy.switch_buffer_bps
+            )
+            if float(best["utility_bps"]) >= float(hold["utility_bps"]) + buffer_bps:
+                chosen = best
+                reason = (
+                    f"Highest eligible utility exceeded hold by at least {buffer_bps:.2f} bps."
+                )
+            else:
+                chosen = hold
+                reason = "Best candidate did not clear the cost-aware hold buffer."
     return {**chosen.to_dict(), "reason": reason, "source": "deterministic"}
 
 
@@ -393,17 +477,33 @@ def _agent_choice(
     path = agent_decision_path(output_root)
     fallback = _deterministic_choice(board, policy)
     if not path.exists():
-        return {**fallback, "source": "deterministic_fallback", "reason": "No agent decision file."}
+        return {
+            **fallback,
+            "source": "deterministic_recommendation",
+            "reason": "Awaiting a fresh agent decision for this board.",
+        }
     try:
         payload = json.loads(path.read_text())
     except json.JSONDecodeError:
-        return {**fallback, "source": "deterministic_fallback", "reason": "Malformed agent decision."}
+        return {
+            **fallback,
+            "source": "deterministic_recommendation",
+            "reason": "Malformed agent decision; awaiting correction.",
+        }
     if payload.get("as_of") != str(as_of) or payload.get("candidate_set_hash") != candidate_hash:
-        return {**fallback, "source": "deterministic_fallback", "reason": "Stale agent decision."}
+        return {
+            **fallback,
+            "source": "deterministic_recommendation",
+            "reason": "Existing agent decision is stale for this board.",
+        }
     candidate_id = str(payload.get("candidate_id", ""))
     matches = board[board["candidate_id"] == candidate_id]
     if matches.empty or not bool(matches.iloc[0]["eligible"]):
-        return {**fallback, "source": "deterministic_fallback", "reason": "Agent selected an unavailable candidate."}
+        return {
+            **fallback,
+            "source": "deterministic_recommendation",
+            "reason": "Existing agent decision is unavailable or ineligible.",
+        }
     chosen = matches.iloc[0]
     return {
         **chosen.to_dict(),
@@ -437,82 +537,15 @@ def choose_candidate(
     return _deterministic_choice(board, policy)
 
 
-def _copy_canonical_artifacts(
-    selected: dict[str, Any],
-    candidate_results: dict[str, RunResult],
-    current: pd.Series,
-    output_root: str | Path,
-    tag: str,
-    candidate_hash: str,
-    as_of: date,
-) -> Path:
-    root = Path(output_root)
-    strategy_id = str(selected["strategy_id"])
-    action = str(selected["action"])
-    source_result = candidate_results.get(strategy_id)
-    if source_result is None or source_result.output_dir is None:
-        if action != "hold":
-            raise RuntimeError(f"No artifact source for selected strategy {strategy_id}")
-        current_state = _load_state(output_root)
-        source_strategy = current_state.get("selected_strategy_id")
-        source_result = candidate_results.get(source_strategy)
-    if source_result is None or source_result.output_dir is None:
-        raise RuntimeError("Cannot emit canonical artifacts without a current candidate run")
-
-    destination = root / CANONICAL_STRATEGY_ID / tag
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        shutil.rmtree(destination)
-    shutil.copytree(source_result.output_dir, destination)
-
-    if action == "hold":
-        current[current.abs() > 1e-12].rename("weight").to_csv(
-            destination / "weights_today.csv"
-        )
-        history_path = destination / "weights_history.csv"
-        history = pd.read_csv(history_path, index_col=0) if history_path.exists() else pd.DataFrame()
-        today_label = str(as_of)
-        current_frame = current.to_frame().T
-        current_frame.index = [today_label]
-        history = pd.concat([history.iloc[:-1], current_frame]).tail(63)
-        history.to_csv(history_path)
-
-    meta_path = destination / "meta.json"
-    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-    meta["strategy_id"] = CANONICAL_STRATEGY_ID
-    meta["selected_strategy_id"] = strategy_id
-    meta["selection"] = {
-        key: value
-        for key, value in selected.items()
-        if key not in {"output_dir"}
-    }
-    meta["selection"]["candidate_set_hash"] = candidate_hash
-    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True, default=str))
-
-    report_path = destination / "morning_report.md"
-    existing = report_path.read_text() if report_path.exists() else ""
-    selection_text = (
-        f"\n\n## Strategy selection\n\n"
-        f"- Selected: **{strategy_id}**\n"
-        f"- Action: **{action}**\n"
-        f"- Source: {selected.get('source')}\n"
-        f"- Expected alpha: {selected.get('expected_alpha_bps')} bps\n"
-        f"- One-way turnover: {float(selected.get('one_way_turnover', 0.0)):.1%}\n"
-        f"- Estimated cost: {selected.get('estimated_cost_bps')} bps\n"
-        f"- Reason: {selected.get('reason')}\n"
-        f"- Candidate hash: `{candidate_hash}`\n"
-    )
-    report_path.write_text(existing + selection_text)
-    return destination
-
-
 def run_strategy_selection(
     panel: Panel,
     output_root: str | Path,
     *,
     policy: SelectionPolicy | None = None,
     tag: str | None = None,
-    activate: bool = True,
+    activate: bool = False,
+    current_weights_override: pd.Series | None = None,
+    current_position_source: str = "canonical_target",
 ) -> SelectionRun:
     policy = policy or load_policy(output_root)
     policy.validate()
@@ -520,12 +553,18 @@ def run_strategy_selection(
     use_tag = tag or datetime.now().strftime("%Y%m%d_%H%M%S")
     state = _load_state(output_root)
     current_strategy_id = state.get("selected_strategy_id")
-    current = current_weights(output_root)
+    current = (
+        current_weights_override.astype(float).copy()
+        if current_weights_override is not None
+        else current_weights(output_root)
+    )
+    current.index = current.index.astype(str)
 
+    specs = [get_strategy(strategy_id) for strategy_id in policy.enabled_strategy_ids]
+    caches = _factor_caches(panel, specs)
     results: dict[str, RunResult] = {}
     rows: list[dict[str, Any]] = []
-    for strategy_id in policy.enabled_strategy_ids:
-        spec = get_strategy(strategy_id)
+    for spec in specs:
         cfg = spec.build_config()
         result = run_pipeline(
             panel,
@@ -534,13 +573,15 @@ def run_strategy_selection(
             tag=use_tag,
             write_artifacts=True,
             factor_names=spec.factor_names,
+            precomputed_factors=caches[spec.strategy_id],
             run_context={
                 "candidate_strategy_id": spec.strategy_id,
                 "strategy_family": spec.family,
                 "strategy_maturity": spec.maturity,
+                "current_position_source": current_position_source,
             },
         )
-        results[strategy_id] = result
+        results[spec.strategy_id] = result
         rows.append(
             _candidate_row(
                 spec,
@@ -551,11 +592,19 @@ def run_strategy_selection(
                 state,
                 policy,
                 as_of,
+                current_position_source,
             )
         )
 
     rows.append(
-        _hold_row(current_strategy_id, current, results, panel, policy)
+        _hold_row(
+            current_strategy_id,
+            current,
+            results,
+            panel,
+            policy,
+            current_position_source,
+        )
     )
     board = pd.DataFrame(rows).sort_values("utility_bps", ascending=False)
     candidate_hash = _board_hash(board, as_of)
@@ -568,15 +617,17 @@ def run_strategy_selection(
     (board_dir / "candidate_board.json").write_text(
         json.dumps(board.to_dict(orient="records"), indent=2, default=str)
     )
-    agent_template = {
-        "as_of": str(as_of),
-        "candidate_set_hash": candidate_hash,
-        "candidate_id": "hold_current",
-        "confidence": 0.0,
-        "reason": "Choose only an eligible candidate_id from candidate_board.csv.",
-    }
     (board_dir / "agent_decision_template.json").write_text(
-        json.dumps(agent_template, indent=2)
+        json.dumps(
+            {
+                "as_of": str(as_of),
+                "candidate_set_hash": candidate_hash,
+                "candidate_id": "hold_current",
+                "confidence": 0.0,
+                "reason": "Choose only an eligible candidate_id from candidate_board.csv.",
+            },
+            indent=2,
+        )
     )
 
     decision = choose_candidate(
@@ -596,36 +647,15 @@ def run_strategy_selection(
 
     canonical_dir = None
     if activate:
-        canonical_dir = _copy_canonical_artifacts(
-            decision,
-            results,
-            current,
-            output_root,
-            use_tag,
-            candidate_hash,
-            as_of,
-        )
-        new_state = {
-            "selected_strategy_id": decision["strategy_id"],
-            "selected_action": decision["action"],
-            "selected_at": (
-                state.get("selected_at")
-                if decision["action"] == "hold" and state.get("selected_at")
-                else str(as_of)
-            ),
-            "last_rebalanced_at": (
-                str(as_of)
-                if decision["action"] == "rebalance"
-                else state.get("last_rebalanced_at")
-            ),
-            "candidate_set_hash": candidate_hash,
-            "canonical_output_dir": str(canonical_dir),
-            "source": decision.get("source"),
-            "reason": decision.get("reason"),
-        }
-        path = state_path(output_root)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(new_state, indent=2, sort_keys=True))
+        if policy.mode == "agent":
+            raise RuntimeError(
+                "Agent mode requires two-phase activation with `python -m svyable.strategy_activate`."
+            )
+        from svyable.strategy_activation import activate_latest_selection
+
+        activation = activate_latest_selection(output_root)
+        canonical_dir = Path(activation["canonical_output_dir"])
+        decision = activation
 
     return SelectionRun(
         board=board,
