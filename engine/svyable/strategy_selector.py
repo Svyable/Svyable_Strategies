@@ -31,6 +31,12 @@ from svyable.strategy_registry import (
 CANONICAL_STRATEGY_ID = "svyable_nasdaq_lo"
 _CASH = "__CASH__"
 
+
+def _default_blend_ids() -> list[str]:
+    from svyable.strategy_blend import default_blend_ids
+
+    return default_blend_ids()
+
 _FACTOR_CONFIG_FIELDS = (
     "beta_win", "idio_win", "down_win", "mom_win", "mom_short", "mom_long",
     "rev_win", "ema_fast", "ema_slow", "ou_short_win", "ou_med_win",
@@ -47,6 +53,14 @@ class SelectionPolicy:
     enabled_strategy_ids: tuple[str, ...] = field(
         default_factory=lambda: tuple(default_strategy_ids())
     )
+    # chimera blends evaluated as first-class board candidates; a blend is
+    # only computed when every component strategy is enabled and evaluated
+    enabled_blend_ids: tuple[str, ...] = field(
+        default_factory=lambda: tuple(_default_blend_ids())
+    )
+    # user-defined chimeras persisted with the policy (validated BlendSpec
+    # payloads: blend_id, display_name, components {strategy_id: weight}, ...)
+    custom_blends: tuple[dict, ...] = ()
     manual_strategy_id: str = "q23_hybrid_alpha"
     switch_buffer_bps: float = 2.0
     rebalance_buffer_bps: float = 0.5
@@ -69,6 +83,19 @@ class SelectionPolicy:
             raise ValueError("alpha_min_history must be at least 10")
         for strategy_id in self.enabled_strategy_ids:
             get_strategy(strategy_id)
+        from svyable.strategy_blend import blend_spec_from_dict, get_blend
+
+        for blend_id in self.enabled_blend_ids:
+            get_blend(blend_id)
+        strategy_and_blend_ids = set(self.enabled_strategy_ids) | set(
+            self.enabled_blend_ids
+        )
+        for payload in self.custom_blends:
+            spec = blend_spec_from_dict(payload)
+            if spec.blend_id in strategy_and_blend_ids:
+                raise ValueError(
+                    f"Custom blend id {spec.blend_id!r} collides with an existing candidate"
+                )
         if self.mode == "manual":
             get_strategy(self.manual_strategy_id)
             if self.manual_strategy_id not in self.enabled_strategy_ids:
@@ -101,8 +128,11 @@ def load_policy(output_root: str | Path) -> SelectionPolicy:
     if not path.exists():
         return SelectionPolicy()
     payload = json.loads(path.read_text())
-    if "enabled_strategy_ids" in payload:
-        payload["enabled_strategy_ids"] = tuple(payload["enabled_strategy_ids"])
+    for key in ("enabled_strategy_ids", "enabled_blend_ids"):
+        if key in payload:
+            payload[key] = tuple(payload[key])
+    if "custom_blends" in payload:
+        payload["custom_blends"] = tuple(dict(item) for item in payload["custom_blends"])
     policy = SelectionPolicy(**payload)
     policy.validate()
     return policy
@@ -264,6 +294,35 @@ def _days_since(value: str | None, as_of: date) -> int:
     return count
 
 
+def _current_minimum_hold(
+    current_strategy_id: str | None,
+    policy: SelectionPolicy,
+) -> int:
+    """Minimum-hold days of whatever is currently active — a registered
+    strategy, a registered chimera, or a policy-persisted custom chimera. An
+    unknown id (e.g. a custom blend later removed from the policy) locks
+    nothing rather than crashing the board."""
+    if not current_strategy_id or current_strategy_id == "cash":
+        return 0
+    try:
+        return int(get_strategy(current_strategy_id).minimum_hold_days)
+    except KeyError:
+        pass
+    from svyable.strategy_blend import blend_spec_from_dict, get_blend
+
+    try:
+        return int(get_blend(current_strategy_id).minimum_hold_days)
+    except KeyError:
+        pass
+    for payload in policy.custom_blends:
+        if str(payload.get("blend_id")) == current_strategy_id:
+            try:
+                return int(blend_spec_from_dict(payload).minimum_hold_days)
+            except (KeyError, ValueError):
+                return 0
+    return 0
+
+
 def _factor_signature(cfg: SvyableConfig) -> tuple[Any, ...]:
     return tuple(getattr(cfg, field) for field in _FACTOR_CONFIG_FIELDS)
 
@@ -296,6 +355,7 @@ def _candidate_row(
     policy: SelectionPolicy,
     as_of: date,
     current_source: str,
+    current_minimum_hold: int,
 ) -> dict[str, Any]:
     target = result.weights.iloc[-1].astype(float)
     target.index = target.index.astype(str)
@@ -325,15 +385,9 @@ def _candidate_row(
         if same_strategy else 10_000
     )
     cadence_due = (not same_strategy) or since_rebalance >= spec.rebalance_interval_days
-    current_spec = (
-        get_strategy(current_strategy_id)
-        if current_strategy_id and current_strategy_id != "cash"
-        else None
-    )
     hold_lock = bool(
-        current_spec
-        and not same_strategy
-        and _days_since(state.get("selected_at"), as_of) < current_spec.minimum_hold_days
+        not same_strategy
+        and _days_since(state.get("selected_at"), as_of) < current_minimum_hold
     )
     kill_switch = bool(result.risk.kill_switch.iloc[-1] > 0)
     rebalance_required = bool(
@@ -361,6 +415,7 @@ def _candidate_row(
         "name": spec.display_name,
         "family": spec.family,
         "maturity": spec.maturity,
+        "components": "",   # chimera rows carry their composition as JSON
         "factor_count": len(spec.factor_names),
         "positions": int((target.abs() > 1e-8).sum()),
         "gross": float(target.abs().sum()),
@@ -422,6 +477,7 @@ def _hold_row(
         "name": "Hold current portfolio" if current_strategy_id else "Hold cash",
         "family": "no-trade baseline",
         "maturity": "baseline",
+        "components": "",
         "factor_count": 0,
         "positions": int((current.abs() > 1e-8).sum()),
         "gross": float(current.abs().sum()),
@@ -586,6 +642,7 @@ def run_strategy_selection(
     )
     current.index = current.index.astype(str)
 
+    current_minimum_hold = _current_minimum_hold(current_strategy_id, policy)
     specs = [get_strategy(strategy_id) for strategy_id in policy.enabled_strategy_ids]
     caches = _factor_caches(panel, specs)
     results: dict[str, RunResult] = {}
@@ -619,8 +676,54 @@ def run_strategy_selection(
                 policy,
                 as_of,
                 current_position_source,
+                current_minimum_hold,
             )
         )
+
+    # chimera blends: convex combinations of the day's component portfolios,
+    # evaluated with the same row math and real blended artifacts so the agent
+    # can only ever pick a fully materialized, activatable candidate
+    from svyable.strategy_blend import (
+        blend_spec_from_dict,
+        build_blend_result,
+        get_blend,
+        resolve_component_weights,
+        write_blend_artifacts,
+    )
+
+    blend_specs = [get_blend(blend_id) for blend_id in policy.enabled_blend_ids]
+    blend_specs += [blend_spec_from_dict(item) for item in policy.custom_blends]
+    for blend_spec in blend_specs:
+        if any(sid not in results for sid in blend_spec.component_ids()):
+            continue   # a component strategy is disabled today; blend sits out
+        component_weights = resolve_component_weights(blend_spec, results)
+        blend_result = build_blend_result(
+            blend_spec, component_weights, results, panel, tag=use_tag
+        )
+        write_blend_artifacts(
+            blend_spec, blend_result, panel, output_root, tag=use_tag
+        )
+        results[blend_spec.blend_id] = blend_result
+        row = _candidate_row(
+            blend_spec,
+            blend_result,
+            panel,
+            current,
+            current_strategy_id,
+            state,
+            policy,
+            as_of,
+            current_position_source,
+            current_minimum_hold,
+        )
+        row["components"] = json.dumps(
+            {
+                strategy_id: round(float(weight), 4)
+                for strategy_id, weight in component_weights.items()
+            },
+            sort_keys=True,
+        )
+        rows.append(row)
 
     rows.append(
         _hold_row(
