@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from svyable.config import nasdaq_lo_config
 from svyable.providers import SyntheticProvider
-from svyable.risk import apply_risk_budget
+from svyable.risk import apply_risk_budget, backtest_pnl
 from svyable.turbulence import absorption_ratio, regime_frame, turbulence_index
 
 
@@ -32,6 +32,38 @@ def _calm_then_crisis(n_assets: int = 30, n_days: int = 800, crisis_start: int =
     )
     return pd.DataFrame(returns, index=idx,
                         columns=[f"A{i:02d}" for i in range(n_assets)])
+
+
+def _calm(n_assets: int = 30, n_days: int = 800, seed: int = 5) -> pd.DataFrame:
+    """A benign, mildly-drifting regime with no crisis anywhere."""
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range("2023-01-02", periods=n_days)
+    idio = rng.normal(0.0, 0.010, size=(n_days, n_assets))
+    common = rng.normal(0.0003, 0.004, size=(n_days, 1))
+    return pd.DataFrame(idio + common, index=idx,
+                        columns=[f"A{i:02d}" for i in range(n_assets)])
+
+
+def _equal_weight(returns: pd.DataFrame) -> pd.DataFrame:
+    unit = returns.notna().astype(float)
+    return unit.div(unit.sum(axis=1), axis=0).fillna(0.0)
+
+
+def _overlay_net_returns(returns: pd.DataFrame, cfg) -> pd.Series:
+    unit = _equal_weight(returns)
+    market = returns.mean(axis=1, skipna=True)
+    stress = pd.Series(0.0, index=returns.index)
+    result = apply_risk_budget(unit, returns, market, stress, cfg)
+    return backtest_pnl(result.final_weights, returns, cfg)["net_ret"]
+
+
+def _max_drawdown(net: pd.Series) -> float:
+    equity = (1.0 + net.fillna(0.0)).cumprod()
+    return float((equity / equity.cummax() - 1.0).min())   # <= 0
+
+
+def _total_return(net: pd.Series) -> float:
+    return float((1.0 + net.fillna(0.0)).prod() - 1.0)
 
 
 def test_turbulence_spikes_and_stays_elevated_in_crisis():
@@ -177,6 +209,55 @@ def test_defensive_boost_cap_disables_risk_on_multiplier():
     )
 
 
+def test_smoothing_cuts_multiplier_turnover_without_losing_protection():
+    """The composite EMA must materially reduce whole-book multiplier turnover
+    (a direct trading cost) while still de-risking through the crisis."""
+    returns = _calm_then_crisis()
+    raw = regime_frame(returns, nasdaq_lo_config(regime_smooth_span=1))
+    smooth = regime_frame(returns, nasdaq_lo_config(regime_smooth_span=5))
+
+    raw_turnover = float(raw["multiplier"].diff().abs().sum())
+    smooth_turnover = float(smooth["multiplier"].diff().abs().sum())
+    assert smooth_turnover < 0.75 * raw_turnover, (
+        f"smoothing did not cut multiplier turnover: "
+        f"{raw_turnover:.2f} -> {smooth_turnover:.2f}"
+    )
+    # protection is retained: the crisis is still de-risked hard
+    assert smooth["throttle"].iloc[660:750].mean() < 0.90
+
+
+def test_overlay_protects_drawdown_without_sacrificing_return():
+    """On a calm->crisis path the overlay must cut the crash drawdown while
+    keeping at least as much total return — earning its keep, not just cutting
+    exposure and leaving return on the table."""
+    returns = _calm_then_crisis()
+    on = _overlay_net_returns(returns, nasdaq_lo_config(turbulence_enabled=True))
+    off = _overlay_net_returns(returns, nasdaq_lo_config(turbulence_enabled=False))
+
+    assert _max_drawdown(on) > _max_drawdown(off) + 0.01, (
+        f"overlay did not shield the crash: "
+        f"{_max_drawdown(off):.3f} -> {_max_drawdown(on):.3f}"
+    )
+    assert _total_return(on) >= _total_return(off) - 1e-9, (
+        "overlay gave up return relative to running flat-out"
+    )
+
+
+def test_overlay_is_near_neutral_in_a_calm_regime():
+    """No crisis anywhere: the overlay must stay close to fully invested and
+    must not quietly bleed return through false de-risking."""
+    returns = _calm(n_days=800)
+    regime = regime_frame(returns, nasdaq_lo_config())
+    assert float(regime["multiplier"].mean()) > 0.95, "false de-risking in calm"
+
+    on = _overlay_net_returns(returns, nasdaq_lo_config(turbulence_enabled=True))
+    off = _overlay_net_returns(returns, nasdaq_lo_config(turbulence_enabled=False))
+    # over an ~3y calm path the overlay should cost almost nothing
+    assert _total_return(on) > _total_return(off) - 0.01, (
+        f"overlay leaked return in calm: {_total_return(off):.3f} vs {_total_return(on):.3f}"
+    )
+
+
 if __name__ == "__main__":
     test_turbulence_spikes_and_stays_elevated_in_crisis()
     test_absorption_rises_when_market_couples()
@@ -186,4 +267,7 @@ if __name__ == "__main__":
     test_missing_assets_do_not_dilute_crisis_turbulence()
     test_panic_baseline_is_robust_to_long_crises()
     test_defensive_boost_cap_disables_risk_on_multiplier()
+    test_smoothing_cuts_multiplier_turnover_without_losing_protection()
+    test_overlay_protects_drawdown_without_sacrificing_return()
+    test_overlay_is_near_neutral_in_a_calm_regime()
     print("TURBULENCE TESTS PASSED")

@@ -141,6 +141,10 @@ class SvyableConfig:
     absorption_win: int = 126
     absorption_top_frac: float = 0.20
     absorption_weight: float = 0.30
+    # coupling turns on once the absorption z-score rises this far above its own
+    # trailing baseline, reaching full strength absorption_delta_span later.
+    absorption_delta_on: float = 0.5
+    absorption_delta_span: float = 1.5
     breadth_win: int = 126
     breadth_smooth: int = 10
     breadth_on: float = 0.45
@@ -153,6 +157,12 @@ class SvyableConfig:
     panic_dd_on: float = 0.08
     panic_dd_full: float = 0.20
     panic_weight: float = 0.20
+    # causal EMA span on the composite regime signal. The turbulence input only
+    # refreshes every turb_step days and is percentile-ranked, so the raw signal
+    # stair-steps; smoothing it stops the whole-book multiplier from whipsawing
+    # (and paying turnover) on noise, while a real crisis persists through it.
+    # 1 disables smoothing.
+    regime_smooth_span: int = 5
     regime_boost_cap: float = 1.05
     regime_boost_breadth: float = 0.65
     regime_boost_turb_pct: float = 0.50

@@ -222,7 +222,10 @@ def regime_frame(returns: pd.DataFrame, cfg: SvyableConfig) -> pd.DataFrame:
     absorption_delta = (
         absorption.rolling(15, min_periods=10).mean() - absorption_mean
     ) / (absorption_std + EPS)
-    absorption_signal = ((absorption_delta - 0.5) / 1.5).clip(0.0, 1.0)
+    absorption_signal = (
+        (absorption_delta - cfg.absorption_delta_on)
+        / max(cfg.absorption_delta_span, 1e-6)
+    ).clip(0.0, 1.0)
 
     breadth = market_breadth(
         returns,
@@ -251,6 +254,13 @@ def regime_frame(returns: pd.DataFrame, cfg: SvyableConfig) -> pd.DataFrame:
         + breadth_weight * breadth_signal.fillna(0.0)
         + panic_weight * panic_signal.fillna(0.0)
     ) / weight_sum
+    # smooth the composite (not the raw inputs) so the whole-book throttle stops
+    # chattering on the stair-stepped turbulence refresh; a crisis is persistent
+    # and survives a short EMA, so protection is retained while turnover is not.
+    if cfg.regime_smooth_span > 1:
+        composite = composite.ewm(
+            span=cfg.regime_smooth_span, adjust=False, min_periods=1
+        ).mean()
     throttle = (1.0 - (1.0 - cfg.turb_floor) * composite).clip(
         cfg.turb_floor, 1.0
     )
