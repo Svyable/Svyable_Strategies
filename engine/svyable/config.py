@@ -156,18 +156,24 @@ class SvyableConfig:
     adv_participation_cap: float = 0.05
 
     # ---- ML sleeve ----
+    # Recency-focused single window: a ~1y trailing window with a ~1q half-life
+    # keeps the fit dominated by the last few months and refits ~monthly. The
+    # window/half-life/cadence are the primary speed knobs; ml_cache and
+    # ml_n_jobs are pure-performance and never change the numbers.
     ml_enabled: bool = True
     ml_model: str = "hist_gbrt"
-    ml_refit_every: int = 21
-    ml_train_win: int = 504
+    ml_refit_every: int = 42
+    ml_train_win: int = 252
     ml_horizon: int = 21
     ml_ridge_alpha: float = 10.0
     ml_max_iter: int = 125
     ml_max_leaf_nodes: int = 15
     ml_learning_rate: float = 0.05
     ml_l2_regularization: float = 10.0
-    ml_sample_half_life: int = 126
+    ml_sample_half_life: int = 63
     ml_max_rows: int = 250000
+    ml_cache: bool = True       # memoize predictions on (factors, panel, ml cfg)
+    ml_n_jobs: int = 1          # parallel walk-forward refits (>1 for sweeps)
 
     extra: dict = field(default_factory=dict)
 

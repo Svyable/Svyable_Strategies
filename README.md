@@ -43,6 +43,66 @@ Not true yet:
 - Seed-universe historical tests remain survivorship-biased unless explicitly labeled point-in-time.
 - Institutional metrics are engineering evidence, not promised future returns.
 
+## System architecture
+
+Every arrow is deterministic code. Data becomes governed factors, factors become
+complete strategy portfolios, portfolios become an immutable candidate board, and
+only an approved canonical portfolio ever reaches the broker.
+
+```mermaid
+flowchart TB
+    subgraph DATA["Market data"]
+        PROV["providers.py<br/>YFinance / Tastytrade"]
+        UNI["universe.py"]
+        CAL["calendar.py"]
+        PANEL["panel.py<br/>OHLCV panel + validate"]
+        UNI --> PROV --> PANEL
+        CAL --> PANEL
+    end
+    subgraph FACT["Governed factor library"]
+        FLIB["factor_library.py<br/>compute_all"]
+        FINST["factor_institutional.py"]
+        FMON["factor_monitor.py<br/>factor_correlation.py"]
+        FINST --> FLIB
+        FLIB --> FMON
+    end
+    subgraph PIPE["Per-mandate pipeline · pipeline.py"]
+        ML["ml.py<br/>cached ML sleeve"]
+        ENS["sleeves.py<br/>build_ensemble · purged IC"]
+        CON["construct.py<br/>seat weights + cluster caps"]
+        RISK["risk.py + turbulence.py<br/>vol target · throttle · kill switch"]
+        ART["backtest_pnl + artifacts.py<br/>weights_today · morning_report"]
+        ML --> ENS --> CON --> RISK --> ART
+    end
+    subgraph STRAT["Mandates"]
+        REG["strategy_registry.py<br/>complete recipes"]
+        BLEND["strategy_blend.py<br/>causal chimeras"]
+    end
+    subgraph SEL["Selection + activation"]
+        DAILY["strategy_daily.py<br/>weekday runner"]
+        SELECT["strategy_selector.py<br/>candidate board + hash"]
+        ACT["strategy_activation.py<br/>one canonical portfolio"]
+    end
+    subgraph EXE["Execution + ledger"]
+        REB["rebalancer.py<br/>plan / execute / reconcile"]
+        GUARD["submission_guard.py<br/>execution_control.py"]
+        BRK["brokers.py<br/>tastytrade_sdk.py"]
+        LED["ledger.py"]
+    end
+    OBS["dashboard*.py + Streamlit pages<br/>Selector · Factor Governance · Alpha Lab"]
+
+    PANEL --> FLIB
+    FLIB --> ENS
+    REG --> PIPE
+    PIPE --> SELECT
+    BLEND --> SELECT
+    DAILY --> SELECT --> ACT
+    ACT --> REB --> GUARD --> BRK
+    REB --> LED
+    SELECT --> OBS
+    ACT --> OBS
+```
+
 ## Alpha architecture
 
 The factor stack stays inside the current daily OHLCV and liquidity contract.
@@ -76,7 +136,7 @@ The factor stack stays inside the current daily OHLCV and liquidity contract.
 ### Flow and nonlinear research
 
 - daily-bar OFI, VPIN, Kyle, BVC, execution-quality, and flow-persistence proxies remain shadow research
-- optional purged histogram-gradient-boosting ML sleeve for nonlinear interactions
+- optional purged histogram-gradient-boosting ML sleeve for nonlinear interactions — recency-focused single training window (~1y lookback, ~1q half-life, ~monthly refit), memoized on a factor/panel/config digest, with optional parallel walk-forward refits and a deterministic ridge fallback
 
 Adding a factor does not silently change every portfolio. A strategy uses only its explicit factor set.
 
@@ -211,6 +271,30 @@ Agent mode is deliberately two-phase:
 7. exactly one canonical portfolio is emitted.
 
 The agent may choose a strategy, chimera, or `hold_current`. It may not edit weights, factors, code, or policy during the morning review.
+
+### Daily PM loop
+
+```mermaid
+flowchart TD
+    START([Weekday open]) --> REFRESH["Layer 1 · deterministic<br/>strategy_daily refreshes shared panel"]
+    REFRESH --> EVAL["Evaluate every enabled mandate<br/>+ eligible chimeras through full pipeline"]
+    EVAL --> BOARD["Immutable candidate board<br/>+ candidate_set_hash"]
+    BOARD --> MODE{Policy mode}
+    MODE -->|deterministic| DPICK["Rank + activate top<br/>eligible candidate"]
+    MODE -->|manual| MPICK["Activate configured<br/>mandate if eligible"]
+    MODE -->|agent| REVIEW["Layer 2 · PM agent reviews<br/>alpha, capture, cost, regime"]
+    REVIEW --> PROPOSE["Write hash-matched<br/>agent_decision.json"]
+    PROPOSE --> APPROVE{User approves?}
+    APPROVE -->|no| HOLD["hold_current<br/>yesterday's weights stay in force"]
+    APPROVE -->|yes| GATES
+    DPICK --> GATES
+    MPICK --> GATES
+    GATES{"Gates: min-hold · cadence · turnover<br/>· net alpha · cost · regime · kill switch"}
+    GATES -->|fail| HOLD
+    GATES -->|pass| ACTIVATE["Layer 3 · activation<br/>one canonical portfolio<br/>weights_today.csv + morning_report.md"]
+    ACTIVATE --> DRYRUN["Tastytrade dry-run / preflight<br/>human-triggered, sandbox only"]
+    DRYRUN --> FILLS["Fills · slippage · drift<br/>· reconciliation → ledger.py"]
+```
 
 See `ops/CLAUDE_LOOP.md`.
 
