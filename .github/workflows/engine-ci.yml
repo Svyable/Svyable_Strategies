@@ -44,6 +44,21 @@ jobs:
       - name: Compile modules
         run: python -m compileall -q svyable
 
+      - name: Golden weights and causality regression
+        run: python tests/test_regression.py
+
+      - name: Turbulence and regime regression
+        run: python tests/test_turbulence.py
+
+      - name: Risk control regression
+        run: python tests/test_risk_controls.py
+
+      - name: Factor library regression
+        run: python tests/test_factor_library_enhancements.py
+
+      - name: Strategy blend regression
+        run: python tests/test_strategy_blend.py
+
       - name: Tastytrade adapter safety tests
         run: python tests/test_tastytrade_sdk_preflight.py
 

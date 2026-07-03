@@ -33,6 +33,32 @@ def ewma_vol(port_ret: pd.Series, lam: float) -> pd.Series:
     return np.sqrt(variance * ANN)
 
 
+def _latched_kill_switch(
+    own_dd: pd.Series,
+    trip_level: float,
+    rearm_level: float,
+) -> pd.Series:
+    """Convert a drawdown series into a latched circuit-breaker state.
+
+    Trips when drawdown exceeds ``trip_level`` and stays engaged until it heals
+    below ``rearm_level`` (``rearm_level <= trip_level``). The hysteresis band
+    stops the breaker from flickering on a jagged recovery. A non-finite reading
+    holds the current state rather than releasing.
+    """
+    values = own_dd.to_numpy(dtype=np.float64)
+    engaged = np.zeros(len(values), dtype=np.float64)
+    state = False
+    for i, dd in enumerate(values):
+        if np.isfinite(dd):
+            if state:
+                if dd < rearm_level:
+                    state = False
+            elif dd > trip_level:
+                state = True
+        engaged[i] = 1.0 if state else 0.0
+    return pd.Series(engaged, index=own_dd.index, name="kill_switch")
+
+
 def apply_risk_budget(
     unit_weights: pd.DataFrame,
     returns: pd.DataFrame,
@@ -65,11 +91,12 @@ def apply_risk_budget(
         cfg.overlay_vol_win,
         min_periods=10,
     ).std() * np.sqrt(ANN)
-    vol_overlay = (cfg.target_vol / (trailing_vol + EPS)).clip(*cfg.overlay_clip)
-    vol_overlay = vol_overlay.where(
-        trailing_vol <= cfg.overlay_max_vol,
-        other=cfg.target_vol / (cfg.overlay_max_vol + EPS),
-    )
+    # realized-vol overlay: cut exposure when book vol runs hot, but stop
+    # tightening past overlay_max_vol and hand off to the drawdown and regime
+    # controls — inverse-vol targeting is noisy and mean-reverting at the
+    # extremes. Neutral (1.0) while the trailing window is still filling.
+    capped_vol = trailing_vol.clip(upper=cfg.overlay_max_vol)
+    vol_overlay = (cfg.target_vol / (capped_vol + EPS)).clip(*cfg.overlay_clip)
     overlay = (vol_overlay * drawdown_throttle).clip(
         *cfg.overlay_clip
     ).fillna(1.0)
@@ -85,10 +112,11 @@ def apply_risk_budget(
 
     scaled_ret = port_ret * budget.shift(1).fillna(cfg.lev_min)
     own_dd = market_drawdown(scaled_ret, cfg.dd_win)
-    kill_switch = (
-        own_dd > cfg.kill_dd_mult * cfg.backtest_max_dd
-    ).astype(float)
-    budget = budget.where(kill_switch == 0.0, other=cfg.lev_min)
+    trip_level = cfg.kill_dd_mult * cfg.backtest_max_dd
+    rearm_level = min(cfg.kill_rearm_mult * cfg.backtest_max_dd, trip_level)
+    kill_switch = _latched_kill_switch(own_dd, trip_level, rearm_level)
+    # a genuine breaker: cut to kill_lev (below every other floor) and latch
+    budget = budget.where(kill_switch == 0.0, other=cfg.kill_lev)
 
     final_weights = unit_weights.mul(budget, axis=0).clip(
         upper=cfg.max_pos * cfg.lev_cap

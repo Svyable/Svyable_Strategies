@@ -147,11 +147,14 @@ def test_inverse_vol_weights_are_clamped_and_deterministic():
             description="test",
             components=(("q23_hybrid_alpha", 0.5), ("q23_low_turnover", 0.5)),
             method="inverse_vol",
+            component_min_weight=0.10,
+            component_max_weight=0.50,
         )
         weights = resolve_component_weights(spec, selection.candidate_results)
         again = resolve_component_weights(spec, selection.candidate_results)
         assert abs(float(weights.sum()) - 1.0) < 1e-9
-        assert (weights >= 0.10 - 1e-9).all() and (weights <= 0.50 + 1e-9).all()
+        assert (weights >= spec.component_min_weight - 1e-9).all()
+        assert (weights <= spec.component_max_weight + 1e-9).all()
         assert (weights == again).all()
 
 
