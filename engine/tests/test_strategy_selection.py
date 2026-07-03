@@ -11,12 +11,14 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from svyable.providers import SyntheticProvider
 from svyable.strategy_activation import activate_latest_selection
 from svyable.strategy_registry import default_strategy_ids, get_strategy, registry_frame
 from svyable.strategy_selector import (
     SelectionPolicy,
     _deterministic_choice,
     agent_decision_path,
+    run_strategy_selection,
     save_policy,
 )
 
@@ -60,6 +62,41 @@ def test_switch_requires_cost_aware_buffer():
     policy = SelectionPolicy(switch_buffer_bps=2.0)
     assert _deterministic_choice(_board(2.5), policy)["candidate_id"] == "hold_current"
     assert _deterministic_choice(_board(3.1), policy)["candidate_id"] == "q23_hybrid_alpha"
+
+
+def test_synthetic_candidate_board_runs_complete_strategies():
+    with TemporaryDirectory() as tmp:
+        panel = SyntheticProvider(n_assets=20, n_days=360).get_panel()
+        policy = SelectionPolicy(
+            mode="deterministic",
+            enabled_strategy_ids=("q23_hybrid_alpha", "q23_low_turnover"),
+            max_one_way_turnover=1.0,
+            min_expected_net_alpha_bps=-100.0,
+        )
+        result = run_strategy_selection(
+            panel,
+            tmp,
+            policy=policy,
+            tag="synthetic_board",
+            activate=False,
+        )
+        assert set(result.board["candidate_id"]) == {
+            "q23_hybrid_alpha",
+            "q23_low_turnover",
+            "hold_current",
+        }
+        assert result.board["candidate_set_hash"].nunique() == 1
+        candidates = result.board[result.board["action"] == "rebalance"]
+        assert (candidates["one_way_turnover"] > 0).all()
+        assert (candidates["current_position_source"] == "canonical_target").all()
+        for output_dir in candidates["output_dir"]:
+            path = Path(output_dir)
+            assert (path / "weights_today.csv").exists()
+            assert (path / "execution_inputs.csv").exists()
+            meta = json.loads((path / "meta.json").read_text())
+            assert meta["factor_library"]["precomputed_cache"] is True
+        assert (result.board_dir / "candidate_board.csv").exists()
+        assert (result.board_dir / "selection.json").exists()
 
 
 def test_agent_activation_is_canonical_and_idempotent():
@@ -173,5 +210,6 @@ def test_agent_activation_is_canonical_and_idempotent():
 if __name__ == "__main__":
     test_registry_contains_distinct_complete_strategies()
     test_switch_requires_cost_aware_buffer()
+    test_synthetic_candidate_board_runs_complete_strategies()
     test_agent_activation_is_canonical_and_idempotent()
     print("STRATEGY SELECTION TESTS PASSED")
