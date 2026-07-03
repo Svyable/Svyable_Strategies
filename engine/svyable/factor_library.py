@@ -20,7 +20,7 @@ import pandas as pd
 
 from svyable import factors as legacy
 from svyable.config import SvyableConfig
-from svyable.panel import EPS, Panel, cs_zscore, residual_returns, rolling_beta
+from svyable.panel import EPS, Panel, cs_zscore, residual_returns
 
 
 SHADOW_DAILY_MICRO = {
@@ -88,17 +88,17 @@ def _micro_noise(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
 
 
 def _fip_momentum(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
-    """Frog-in-the-pan momentum: reward gradual rather than discrete trends."""
-    formation = max(126, cfg.mom_long)
-    skip = min(21, max(1, formation // 6))
+    """Frog-in-the-pan momentum on a canonical 12-month, one-month-skip window."""
+    formation = 252
+    skip = 21
     effective = formation - skip
     past_return = panel.close.shift(skip) / (panel.close.shift(formation) + EPS) - 1.0
     lagged_daily = panel.ret.shift(skip)
     positive_share = (lagged_daily > 0).rolling(
-        effective, min_periods=max(63, effective // 2)
+        effective, min_periods=max(126, effective // 2)
     ).mean()
     negative_share = (lagged_daily < 0).rolling(
-        effective, min_periods=max(63, effective // 2)
+        effective, min_periods=max(126, effective // 2)
     ).mean()
     information_discreteness = np.sign(past_return) * (
         negative_share - positive_share
@@ -172,7 +172,7 @@ def register_extensions() -> None:
         _fip_momentum,
         proven=True,
         lineage="Da-Gurun-Warachka frog-in-the-pan momentum",
-        description="Skipped momentum weighted by information continuity.",
+        description="12-1 momentum weighted by information continuity.",
     )
     _register(
         "overnight_intraday_tug",
