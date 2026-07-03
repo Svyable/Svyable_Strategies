@@ -433,6 +433,134 @@ register(StrategySpec(
     regime_profile="experimental",
 ))
 
+# Cookbook Recipe 3.3 (Behavioral Finance Factor Laboratory): a book built from
+# systematic psychological biases — attention/disposition/anchoring, Kaufman
+# efficiency and mean-reversion speed, trend quality, and higher-moment risk
+# preferences — with light defensive controls. Its alpha is largely orthogonal
+# to price trend, so it diversifies the ensemble and earns most in irrational
+# regimes.
+register(StrategySpec(
+    strategy_id="q23_behavioral_alpha",
+    display_name="Q23 Behavioral Alpha",
+    family="behavioral finance ensemble",
+    description=(
+        "Neural-Alpha behavioral laboratory: attention momentum, disposition "
+        "and anchoring biases, Kaufman efficiency, mean-reversion speed, and "
+        "higher-moment preferences, with liquidity and correlation controls. "
+        "Alpha from psychological deviations, strongest in irrational regimes."
+    ),
+    factor_names=tuple(dict.fromkeys((
+        # behavioral core (Recipe 3.3)
+        "attention_momentum", "disposition_alpha", "anchoring_bias",
+        "overnight_bias", "max_lottery", "skew_pref", "kurtosis_inv",
+        # microstructure adaptation
+        "efficiency_ratio", "mean_reversion_speed", "vol_of_vol_inv",
+        # momentum quality
+        "momentum_quality", "momentum_persistence",
+        # cross-sectional context + risk controls
+        "cross_sectional_dispersion", "liquidity_momentum",
+        "inv_vol", "inv_idio", "low_corr", "liquidity",
+    ))),
+    config_overrides={
+        "ml_enabled": False,
+        "seats_base": 20,
+        "seats_min": 16,
+        "seats_max": 26,
+        "score_smooth_win": 3,
+        "weight_smooth_alpha": 0.40,
+        "no_trade_band": 0.04,
+        "target_vol": 0.15,
+    },
+    minimum_hold_days=2,
+    pitch_role="behavioral diversifying alpha",
+    regime_profile="behavioral",
+))
+
+# Cookbook Recipe 4.3 (Q23 Composer v1, Sharpe-optimized): a broad ~30-factor
+# book spanning risk, momentum, reversal, and volatility sleeves, weighted by
+# the nonlinear ML ensemble under a hierarchical risk-parity allocation at a
+# higher 18% vol target. Downside/Sortino emphasis is expressed through a tight
+# stressed-vol floor rather than a bespoke objective — Svyable is OHLCV-only, so
+# the cookbook's quality/value category is proxied by trend-quality and
+# residual-alpha factors rather than fundamentals.
+register(StrategySpec(
+    strategy_id="q23_composer_sharpe",
+    display_name="Q23 Composer (Sharpe-Optimized)",
+    family="broad Sharpe-optimized composer",
+    description=(
+        "Comprehensive multi-sleeve composer: full defensive and momentum "
+        "suites plus reversal, OU, efficiency, and vol-scaled momentum, blended "
+        "by the ML ensemble under HRP construction at an 18% vol target with a "
+        "tight stressed-vol floor for downside (Sortino) emphasis."
+    ),
+    factor_names=tuple(dict.fromkeys(
+        DEFENSIVE + MOMENTUM + (
+            "srev", "resid_srev", "ou_zscore", "ou_predicted_return",
+            "mean_reversion_speed", "vol_scaled_momentum",
+        )
+    )),
+    config_overrides={
+        "ml_enabled": True,
+        "seats_base": 25,
+        "seats_min": 20,
+        "seats_max": 30,
+        "seat_weighting": "hrp",
+        "max_pos": 0.10,
+        "cluster_weight_cap": 0.30,
+        "score_smooth_win": 4,
+        "weight_smooth_alpha": 0.33,
+        "no_trade_band": 0.04,
+        "target_vol": 0.18,
+        "target_vol_stressed": 0.11,
+        "regime_boost_cap": 1.05,
+    },
+    minimum_hold_days=3,
+    pitch_role="Sharpe-optimized diversified core",
+    regime_profile="balanced",
+))
+
+# Cookbook Factor Encyclopedia (Multi-Timeframe Factors): a pure cross-horizon
+# trend book — multi-horizon and residual trend with volume confirmation and
+# volatility-scaled momentum across short/intermediate/long formation windows —
+# distinct from the beta-capture and crash-resilient books, which overlay
+# participation and resilience sleeves on top of trend.
+register(StrategySpec(
+    strategy_id="q23_multi_timeframe_trend",
+    display_name="Q23 Multi-Timeframe Trend",
+    family="cross-horizon trend",
+    description=(
+        "Multi-timeframe trend across short, intermediate, and long formation "
+        "windows: multi-horizon and residual trend, volume-confirmed breakout, "
+        "vol-scaled and intermediate momentum, with idiosyncratic-risk and "
+        "liquidity controls. Trend continuation without a resilience overlay."
+    ),
+    factor_names=tuple(dict.fromkeys(
+        INSTITUTIONAL_TREND + (
+            "mom_12_1", "fip_momentum", "intermediate_momentum",
+            "resid_mom", "trend_consistency", "slope_ema", "efficiency_ratio",
+            "gk_inv_vol", "inv_idio", "low_corr", "liquidity",
+        )
+    )),
+    config_overrides={
+        "ml_enabled": False,
+        "seats_base": 20,
+        "seats_min": 16,
+        "seats_max": 26,
+        "seat_weighting": "blend",
+        "max_pos": 0.11,
+        "cluster_weight_cap": 0.32,
+        "score_smooth_win": 4,
+        "weight_smooth_alpha": 0.34,
+        "no_trade_band": 0.045,
+        "target_vol": 0.17,
+        "regime_boost_cap": 1.08,
+        "turb_floor": 0.55,
+    },
+    minimum_hold_days=4,
+    pitch_role="multi-horizon trend alpha",
+    regime_profile="risk_on",
+))
+
 
 def get_strategy(strategy_id: str) -> StrategySpec:
     try:
