@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -10,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 from svyable.strategy_activation import activate_latest_selection
-from svyable.strategy_registry import registry_frame
+from svyable.strategy_registry import get_strategy, registry_frame
 from svyable.strategy_selector import (
     SelectionPolicy,
     agent_decision_path,
@@ -29,11 +31,73 @@ class StrategySelectionService:
     def registry(self) -> pd.DataFrame:
         return registry_frame()
 
+    def strategy_details(self, strategy_id: str) -> dict[str, Any]:
+        spec = get_strategy(strategy_id)
+        cfg = spec.build_config()
+        return {
+            "strategy_id": spec.strategy_id,
+            "name": spec.display_name,
+            "family": spec.family,
+            "description": spec.description,
+            "maturity": spec.maturity,
+            "factor_names": list(spec.factor_names),
+            "factor_count": len(spec.factor_names),
+            "rebalance_interval_days": spec.rebalance_interval_days,
+            "minimum_hold_days": spec.minimum_hold_days,
+            "forecast_horizon_days": spec.forecast_horizon_days,
+            "config_overrides": spec.config_overrides,
+            "resolved_config_hash": cfg.config_hash(),
+        }
+
     def policy(self) -> SelectionPolicy:
         return load_policy(self.output_root)
 
     def save_policy(self, policy: SelectionPolicy) -> Path:
         return save_policy(self.output_root, policy)
+
+    def run_evaluation(
+        self,
+        *,
+        start: str = "2020-01-01",
+        provider: str = "yf",
+        force: bool = True,
+    ) -> dict[str, Any]:
+        if provider not in {"yf", "tasty"}:
+            raise ValueError("provider must be yf or tasty")
+        command = [
+            sys.executable,
+            "-m",
+            "svyable.strategy_daily",
+            "--out",
+            str(self.output_root),
+            "--start",
+            str(start),
+            "--provider",
+            provider,
+            "--evaluate-only",
+        ]
+        if force:
+            command.append("--force")
+        completed = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=900,
+            check=False,
+        )
+        result = {
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-12000:],
+            "stderr": completed.stderr[-12000:],
+            "command": command,
+        }
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "Candidate evaluation failed.\n"
+                + (completed.stderr or completed.stdout)[-4000:]
+            )
+        return result
 
     def state(self) -> dict[str, Any]:
         path = state_path(self.output_root)
