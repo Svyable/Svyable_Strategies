@@ -36,8 +36,8 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
         index=["deterministic", "agent", "manual"].index(policy.mode),
         horizontal=True,
         help=(
-            "Deterministic ranks the board; agent accepts a validated decision file; "
-            "manual activates the selected registered strategy when eligible."
+            "Deterministic ranks and activates immediately; agent emits a board and "
+            "waits for a validated decision; manual selects one registered strategy."
         ),
     )
     strategy_options = list(registry.index)
@@ -174,16 +174,28 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
             "PM rationale",
             value="Prefer the highest net expected alpha after cost and turnover constraints.",
         )
-        if st.button("Write validated agent decision", disabled=not eligible_ids):
-            try:
-                path = service.save_agent_decision(
-                    candidate_id=selected_candidate,
-                    reason=reason,
-                    confidence=confidence,
-                )
-                st.success(f"Decision saved to {path}. It will be validated on the next run.")
-            except Exception as exc:
-                st.error(str(exc))
+        decision_col, activate_col = st.columns(2)
+        with decision_col:
+            if st.button("Write validated agent decision", disabled=not eligible_ids):
+                try:
+                    path = service.save_agent_decision(
+                        candidate_id=selected_candidate,
+                        reason=reason,
+                        confidence=confidence,
+                    )
+                    st.success(f"Decision saved to {path}.")
+                except Exception as exc:
+                    st.error(str(exc))
+        with activate_col:
+            if st.button("Activate latest validated decision", type="primary"):
+                try:
+                    result = service.activate_latest()
+                    st.success(
+                        f"Activated {result['strategy_id']} with action {result['action']}."
+                    )
+                    st.json(result)
+                except Exception as exc:
+                    st.error(str(exc))
 
     with st.expander("Agent prompt"):
         st.code(service.agent_prompt(), language="text")
