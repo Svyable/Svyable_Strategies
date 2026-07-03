@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from svyable import factor_library as flib
+from svyable.calendar import is_trading_day
 from svyable.config import SvyableConfig
 from svyable.panel import EPS, Panel
 from svyable.pipeline import RunResult, run_pipeline
@@ -28,6 +29,7 @@ from svyable.strategy_registry import (
 )
 
 CANONICAL_STRATEGY_ID = "svyable_nasdaq_lo"
+_CASH = "__CASH__"
 
 _FACTOR_CONFIG_FIELDS = (
     "beta_win", "idio_win", "down_win", "mom_win", "mom_short", "mom_long",
@@ -41,7 +43,7 @@ _FACTOR_CONFIG_FIELDS = (
 
 @dataclass(frozen=True)
 class SelectionPolicy:
-    mode: str = "deterministic"  # deterministic | agent | manual
+    mode: str = "deterministic"
     enabled_strategy_ids: tuple[str, ...] = field(
         default_factory=lambda: tuple(default_strategy_ids())
     )
@@ -69,6 +71,8 @@ class SelectionPolicy:
             get_strategy(strategy_id)
         if self.mode == "manual":
             get_strategy(self.manual_strategy_id)
+            if self.manual_strategy_id not in self.enabled_strategy_ids:
+                raise ValueError("manual strategy must also be enabled")
 
 
 @dataclass
@@ -155,8 +159,14 @@ def _align_weights(left: pd.Series, right: pd.Series) -> tuple[pd.Series, pd.Ser
     return left.reindex(index).fillna(0.0), right.reindex(index).fillna(0.0)
 
 
+def _with_cash(weights: pd.Series) -> pd.Series:
+    result = weights.astype(float).copy()
+    result.loc[_CASH] = 1.0 - float(result.sum())
+    return result
+
+
 def _one_way_turnover(target: pd.Series, current: pd.Series) -> float:
-    target, current = _align_weights(target, current)
+    target, current = _align_weights(_with_cash(target), _with_cash(current))
     return float((target - current).abs().sum() / 2.0)
 
 
@@ -166,7 +176,6 @@ def _portfolio_expected_alpha(
     weights: pd.Series,
     policy: SelectionPolicy,
 ) -> tuple[float, float, int]:
-    """Causal next-day alpha estimate calibrated from score-to-return slopes."""
     score = result.ensemble.score.reindex_like(panel.ret)
     future = panel.ret.shift(-1)
     valid = score.notna() & future.notna()
@@ -241,9 +250,18 @@ def _days_since(value: str | None, as_of: date) -> int:
     if not value:
         return 10_000
     try:
-        return max(0, (as_of - date.fromisoformat(value[:10])).days)
+        start = date.fromisoformat(value[:10])
     except ValueError:
         return 10_000
+    if start >= as_of:
+        return 0
+    count = 0
+    cursor = start + timedelta(days=1)
+    while cursor <= as_of:
+        if is_trading_day(cursor):
+            count += 1
+        cursor += timedelta(days=1)
+    return count
 
 
 def _factor_signature(cfg: SvyableConfig) -> tuple[Any, ...]:
@@ -283,7 +301,7 @@ def _candidate_row(
     target.index = target.index.astype(str)
     target_aligned, current_aligned = _align_weights(target, current)
     delta = target_aligned - current_aligned
-    turnover = float(delta.abs().sum() / 2.0)
+    turnover = _one_way_turnover(target, current)
     max_change = float(delta.abs().max()) if len(delta) else 0.0
     expected, confidence, observations = _portfolio_expected_alpha(
         result, panel, target, policy
@@ -318,7 +336,10 @@ def _candidate_row(
         and _days_since(state.get("selected_at"), as_of) < current_spec.minimum_hold_days
     )
     kill_switch = bool(result.risk.kill_switch.iloc[-1] > 0)
-    rebalance_required = bool(max_change >= cfg.no_trade_band or turnover > 1e-6)
+    rebalance_required = bool(
+        max_change >= cfg.no_trade_band
+        or turnover >= max(0.05, cfg.no_trade_band)
+    )
     eligible = bool(
         not kill_switch
         and not hold_lock
@@ -327,7 +348,12 @@ def _candidate_row(
         and turnover <= policy.max_one_way_turnover
         and net_alpha_bps >= policy.min_expected_net_alpha_bps
     )
-    overlap = float(np.minimum(current_aligned.abs(), target_aligned.abs()).sum())
+    same_sign = np.sign(current_aligned) == np.sign(target_aligned)
+    overlap = float(
+        np.minimum(current_aligned.abs(), target_aligned.abs())
+        .where(same_sign, 0.0)
+        .sum()
+    )
     return {
         "candidate_id": spec.strategy_id,
         "strategy_id": spec.strategy_id,
