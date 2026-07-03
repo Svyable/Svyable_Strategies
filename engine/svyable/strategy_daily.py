@@ -19,7 +19,7 @@ from svyable.calendar import expected_last_close, is_trading_day
 from svyable.ledger import Ledger
 from svyable.providers import TastytradeProvider, YFinanceProvider
 from svyable.strategy_activation import activate_latest_selection
-from svyable.strategy_selector import load_policy, run_strategy_selection
+from svyable.strategy_selector import current_weights, load_policy, run_strategy_selection
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -85,6 +85,25 @@ def _broker_weights(panel, ledger: Ledger) -> tuple[pd.Series | None, str]:
         return None, "canonical_target"
 
 
+def _write_position_snapshot(
+    output_root: str | Path,
+    *,
+    weights: pd.Series,
+    source: str,
+    as_of: date,
+    candidate_set_hash: str,
+) -> Path:
+    path = Path(output_root) / "strategy_selection" / "current_positions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "as_of": str(as_of),
+        "candidate_set_hash": candidate_set_hash,
+        "source": source,
+        "weights": {str(symbol): float(value) for symbol, value in weights.items()},
+    }, indent=2, sort_keys=True))
+    return path
+
+
 def run(args) -> int:
     ledger = Ledger(Path(args.out) / "ledger.db")
     try:
@@ -137,13 +156,26 @@ def run(args) -> int:
 
         policy = load_policy(args.out)
         actual_weights, position_source = _broker_weights(panel, ledger)
+        starting_weights = (
+            actual_weights.copy()
+            if actual_weights is not None
+            else current_weights(args.out)
+        )
         selection = run_strategy_selection(
             panel,
             args.out,
             policy=policy,
             activate=False,
-            current_weights_override=actual_weights,
+            current_weights_override=starting_weights,
             current_position_source=position_source,
+        )
+        candidate_hash = str(selection.board.iloc[0]["candidate_set_hash"])
+        _write_position_snapshot(
+            args.out,
+            weights=starting_weights,
+            source=position_source,
+            as_of=observed,
+            candidate_set_hash=candidate_hash,
         )
 
         awaiting_agent = policy.mode == "agent" or args.evaluate_only
