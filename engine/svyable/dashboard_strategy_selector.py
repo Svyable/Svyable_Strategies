@@ -20,11 +20,12 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
         "candidate portfolio; neither the GUI nor the agent edits weights directly."
     )
 
-    cols = st.columns(4)
+    cols = st.columns(5)
     cols[0].metric("Current strategy", state.get("selected_strategy_id", "not selected"))
     cols[1].metric("Last action", state.get("selected_action", "—"))
     cols[2].metric("Selection source", state.get("source", "—"))
-    cols[3].metric("Candidate hash", state.get("candidate_set_hash", "—"))
+    cols[3].metric("Position source", state.get("current_position_source", "—"))
+    cols[4].metric("Candidate hash", state.get("candidate_set_hash", "—"))
 
     st.subheader("Strategy registry")
     st.dataframe(registry, use_container_width=True)
@@ -129,6 +130,11 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
             "or wait for the next scheduled PM run."
         )
     else:
+        position_source = str(board.iloc[0].get("current_position_source", "unknown"))
+        st.caption(
+            f"Turnover and overlap are measured from `{position_source}`. "
+            "Expected alpha is a causal, confidence-shrunk one-day estimate—not a promise."
+        )
         display_columns = [
             column
             for column in [
@@ -136,13 +142,20 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
                 "action",
                 "eligible",
                 "expected_alpha_bps",
+                "alpha_confidence",
                 "estimated_cost_bps",
                 "net_expected_alpha_bps",
                 "utility_bps",
                 "one_way_turnover",
+                "max_weight_change",
+                "avg_one_way_turnover_63d",
                 "current_overlap",
+                "return_63d",
+                "return_252d",
+                "sharpe_252d",
                 "recent_vol",
                 "recent_max_drawdown",
+                "rebalance_required",
                 "cadence_due",
                 "hold_lock",
                 "kill_switch",
@@ -172,7 +185,7 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
         )
         reason = st.text_area(
             "PM rationale",
-            value="Prefer the highest net expected alpha after cost and turnover constraints.",
+            value="Prefer the highest robust net expected alpha after costs, turnover, and current-position overlap.",
         )
         decision_col, activate_col = st.columns(2)
         with decision_col:
