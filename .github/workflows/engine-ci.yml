@@ -46,6 +46,9 @@ jobs:
       - name: Execution artifact regression
         run: python tests/test_execution_artifacts.py
 
+      - name: Strategy selection regression
+        run: python tests/test_strategy_selection.py
+
       - name: Dashboard ADV regression
         run: python tests/test_dashboard_adv_plan.py
 
