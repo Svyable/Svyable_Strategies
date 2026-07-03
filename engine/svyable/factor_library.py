@@ -187,6 +187,83 @@ def _return_seasonality(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     return total.div(count.replace(0.0, np.nan))
 
 
+def _atr(panel: Panel, window: int = 14) -> pd.DataFrame:
+    """Wilder true range averaged over ``window`` bars.
+
+    True range is the largest of the current high-low span and the gap-adjusted
+    moves against the prior close, so it captures overnight jumps the intraday
+    range misses. Used to normalize price-distance technical factors by each
+    name's own volatility, making them cross-sectionally comparable.
+    """
+    prev_close = panel.close.shift(1)
+    true_range = np.maximum(
+        panel.high - panel.low,
+        np.maximum((panel.high - prev_close).abs(), (panel.low - prev_close).abs()),
+    )
+    return true_range.rolling(window, min_periods=max(5, window // 2)).mean()
+
+
+def _ma_cloud(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Position relative to the 50- and 200-day moving-average 'cloud'.
+
+    ATR-normalized distance above both key moving averages; a standard trend
+    location signal. Higher means the price sits well above its own long-run
+    averages relative to its volatility (trend continuation tilt).
+    """
+    atr = _atr(panel, 14) + EPS
+    ma_fast = panel.close.rolling(50, min_periods=25).mean()
+    ma_slow = panel.close.rolling(200, min_periods=100).mean()
+    return (panel.close - ma_fast) / atr + (panel.close - ma_slow) / atr
+
+
+def _vol_breakout(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Volatility expansion confirmed by trend direction.
+
+    ATR relative to its own 20-day average times the sign of trailing momentum:
+    positive when range is expanding while price trends up (a directional
+    breakout), negative when expansion accompanies a decline.
+    """
+    atr = _atr(panel, 14)
+    expansion = atr / (atr.rolling(20, min_periods=10).mean() + EPS) - 1.0
+    momentum = panel.close / (panel.close.shift(21) + EPS) - 1.0
+    return expansion * np.sign(momentum)
+
+
+def _calm_flow(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Declining volume trend (short vs long average).
+
+    Negative of the short-over-long volume ratio, so higher means volume is
+    fading — a calm-tape defensive signal that often precedes reversals.
+    """
+    v_short = panel.volume.rolling(5, min_periods=3).mean()
+    v_long = panel.volume.rolling(63, min_periods=32).mean()
+    return -(v_short / (v_long + EPS) - 1.0)
+
+
+def _vol_surprise(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Volume relative to its trailing 21-day average.
+
+    Raw volume-surprise signal; its cross-sectional direction is left to IC
+    weighting (elevated volume can precede either continuation or reversal), so
+    it is carried as shadow research with no guaranteed weight floor.
+    """
+    avg = panel.volume.rolling(21, min_periods=10).mean()
+    return panel.volume / (avg + EPS) - 1.0
+
+
+def _idio_tail_risk(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Left-tail idiosyncratic risk: the 5th-percentile residual return.
+
+    The 5% quantile of lagged-beta residual returns is a (negative) worst-case
+    move; a higher (shallower) quantile means a thinner left tail, so higher is
+    safer. A defensive complement to inverse-volatility that targets crash
+    asymmetry rather than dispersion.
+    """
+    residual = residual_returns(panel.ret, panel.market_ret, cfg.beta_win)
+    window = max(63, cfg.idio_win)
+    return residual.rolling(window, min_periods=max(21, window // 2)).quantile(0.05)
+
+
 def register_extensions() -> None:
     _register(
         "inv_idio",
@@ -275,6 +352,46 @@ def register_extensions() -> None:
         proven=False,
         lineage="Heston-Sadka return seasonality",
         description="Same-calendar-month trailing return averaged over annual lags 1-5.",
+    )
+    _register(
+        "ma_cloud",
+        "momentum",
+        _ma_cloud,
+        proven=False,
+        lineage="technical moving-average cloud location",
+        description="ATR-normalized distance above the 50- and 200-day moving averages.",
+    )
+    _register(
+        "vol_breakout",
+        "momentum",
+        _vol_breakout,
+        proven=False,
+        lineage="volatility-expansion breakout with trend confirmation",
+        description="ATR vs its 20-day average, signed by trailing momentum.",
+    )
+    _register(
+        "calm_flow",
+        "defensive",
+        _calm_flow,
+        proven=False,
+        lineage="declining-volume calm-tape proxy",
+        description="Negative short-over-long volume ratio; higher means fading volume.",
+    )
+    _register(
+        "vol_surprise",
+        "defensive",
+        _vol_surprise,
+        proven=False,
+        lineage="volume surprise vs trailing average",
+        description="Volume relative to its 21-day average; direction set by IC.",
+    )
+    _register(
+        "idio_tail_risk",
+        "defensive",
+        _idio_tail_risk,
+        proven=False,
+        lineage="idiosyncratic left-tail (crash asymmetry)",
+        description="5th-percentile residual return; higher means a thinner left tail.",
     )
 
 

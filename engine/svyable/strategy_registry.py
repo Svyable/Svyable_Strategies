@@ -562,6 +562,49 @@ register(StrategySpec(
 ))
 
 
+# Cookbook Technical + Volatility factor families: a chart-technician book built
+# on ATR-normalized moving-average location, volatility-expansion breakouts, and
+# volume/tail-risk signals, disciplined by inverse-volatility and idiosyncratic
+# controls. Leans on newer shadow factors, so it earns its board seat through IC
+# rather than a guaranteed floor.
+register(StrategySpec(
+    strategy_id="q23_technical_alpha",
+    display_name="Q23 Technical Alpha",
+    family="technical / chart-pattern ensemble",
+    description=(
+        "Technical trend and volatility ensemble: moving-average cloud, "
+        "volatility-expansion breakout, classic breakout and EMA slope, 52-week "
+        "proximity, and volume/left-tail signals, with inverse-volatility and "
+        "idiosyncratic-risk controls."
+    ),
+    factor_names=tuple(dict.fromkeys((
+        # new technical + volatility factors
+        "ma_cloud", "vol_breakout", "calm_flow", "vol_surprise", "idio_tail_risk",
+        # established technical / momentum
+        "breakout", "slope_ema", "prox_52w_high", "mom_accel", "efficiency_ratio",
+        # risk controls
+        "inv_vol", "gk_inv_vol", "inv_idio", "low_corr", "liquidity",
+    ))),
+    config_overrides={
+        "ml_enabled": False,
+        "seats_base": 20,
+        "seats_min": 16,
+        "seats_max": 26,
+        "seat_weighting": "blend",
+        "max_pos": 0.11,
+        "cluster_weight_cap": 0.32,
+        "score_smooth_win": 4,
+        "weight_smooth_alpha": 0.35,
+        "no_trade_band": 0.045,
+        "target_vol": 0.16,
+        "regime_boost_cap": 1.06,
+    },
+    minimum_hold_days=3,
+    pitch_role="technical trend and volatility alpha",
+    regime_profile="technical",
+))
+
+
 def get_strategy(strategy_id: str) -> StrategySpec:
     try:
         return _REGISTRY[strategy_id]
