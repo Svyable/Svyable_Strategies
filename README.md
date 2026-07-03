@@ -80,14 +80,14 @@ The selector compares:
 
 - Causal expected next-day alpha
 - Alpha confidence and observation history
-- One-way turnover from current holdings
+- One-way turnover from current holdings, including the cash leg
 - Largest required weight change
 - Estimated transaction cost
-- Current-position overlap
+- Sign-aware current-position overlap
 - Recent 63-day and 252-day return
 - Recent Sharpe, volatility, and drawdown
 - Typical recent turnover
-- Rebalance cadence
+- Trading-session rebalance cadence
 - Minimum-hold lock
 - Kill-switch state
 
@@ -113,7 +113,7 @@ The selector activates the highest eligible cost-aware utility candidate. It hol
 
 ### Manual
 
-The configured registered strategy is selected when it passes all eligibility gates. The GUI never permits direct weight editing.
+The configured enabled strategy is selected when it passes all eligibility gates. The GUI never permits direct weight editing.
 
 ### Agent
 
@@ -245,7 +245,7 @@ python -m svyable.ui
 
 The Streamlit multipage console includes:
 
-- **Strategy Selector** — registry, policy, candidate board, agent decision, activation
+- **Strategy Selector** — inspect recipes, edit policy, rerun candidates, review the board, write a decision, and activate
 - **Factor Governance** — factor maturity, ICIR, hit rate, breadth, coverage, and weights
 - **Overview** — run health, drift, warnings, and execution quality
 - **Strategy** — canonical selected portfolio and morning report
@@ -337,22 +337,22 @@ Reference Q23 proof point: `q23_neural_alpha`, 2025 under contest constraints �
 ## Repository map
 
 ```text
-README.md                               canonical narrative and operations guide
-engine/svyable/strategy_registry.py     complete registered strategy recipes
-engine/svyable/strategy_selector.py     candidate evaluation and policy selection
-engine/svyable/strategy_activation.py   validated one-time canonical activation
-engine/svyable/strategy_daily.py        weekday candidate runner
-engine/svyable/strategy_activate.py     activation CLI
-engine/svyable/pipeline.py              reusable strategy pipeline
-engine/svyable/factors.py               Q23-derived flat factor registry
-engine/svyable/weighting.py             purged causal IC implementation
-engine/svyable/tastytrade_sdk.py        typed community-SDK broker adapter
-engine/svyable/execution_control.py      planning, polling, and reconciliation
-engine/svyable/execution_quality.py      fill normalization and slippage
-engine/pages/1_Strategy_Selector.py      PM/agent strategy GUI
-engine/pages/2_Factor_Governance.py      factor governance GUI
-engine/tests/                            offline regression suite
-ops/CLAUDE_LOOP.md                       scheduled agent/PM contract
+README.md                                   canonical narrative and operations guide
+engine/svyable/strategy_registry.py         complete registered strategy recipes
+engine/svyable/strategy_selector.py         candidate evaluation and policy selection
+engine/svyable/strategy_activation.py       validated one-time canonical activation
+engine/svyable/strategy_daily.py            weekday candidate runner
+engine/svyable/strategy_activate.py         activation CLI
+engine/svyable/pipeline.py                  reusable strategy pipeline
+engine/svyable/factors.py                   Q23-derived flat factor registry
+engine/svyable/weighting.py                 purged causal IC implementation
+engine/svyable/tastytrade_sdk.py            typed community-SDK broker adapter
+engine/svyable/execution_control.py          planning, polling, and reconciliation
+engine/svyable/execution_quality.py          fill normalization and slippage
+engine/svyable/pages/1_Strategy_Selector.py  PM/agent strategy GUI
+engine/svyable/pages/2_Factor_Governance.py  factor governance GUI
+engine/tests/                                offline regression suite
+ops/CLAUDE_LOOP.md                           scheduled agent/PM contract
 ```
 
 ## Next actions
