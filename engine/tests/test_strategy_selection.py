@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -63,7 +62,7 @@ def test_switch_requires_cost_aware_buffer():
     assert _deterministic_choice(_board(3.1), policy)["candidate_id"] == "q23_hybrid_alpha"
 
 
-def test_agent_activation_emits_one_canonical_portfolio():
+def test_agent_activation_is_canonical_and_idempotent():
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         save_policy(
@@ -84,10 +83,16 @@ def test_agent_activation_emits_one_canonical_portfolio():
             columns=["AAPL", "MSFT"],
         ).to_csv(source / "weights_history.csv")
         pd.DataFrame(
-            {"price": [200.0, 500.0], "adv_dollars": [1e9, 1e9], "is_liquid": [True, True]},
+            {
+                "price": [200.0, 500.0],
+                "adv_dollars": [1e9, 1e9],
+                "is_liquid": [True, True],
+            },
             index=["AAPL", "MSFT"],
         ).to_csv(source / "execution_inputs.csv")
-        (source / "meta.json").write_text(json.dumps({"strategy_id": "candidate_q23_hybrid_alpha"}))
+        (source / "meta.json").write_text(
+            json.dumps({"strategy_id": "candidate_q23_hybrid_alpha"})
+        )
         (source / "morning_report.md").write_text("# Candidate report\n")
 
         board_dir = root / "strategy_selection" / "20260702_073000"
@@ -123,8 +128,10 @@ def test_agent_activation_emits_one_canonical_portfolio():
         board.to_csv(board_dir / "candidate_board.csv", index=False)
         (board_dir / "selection.json").write_text(json.dumps({
             "candidate_id": "hold_current",
-            "source": "deterministic_fallback",
+            "source": "deterministic_recommendation",
             "reason": "Awaiting agent",
+            "as_of": "2026-07-02",
+            "candidate_set_hash": "abc123",
         }))
         decision_path = agent_decision_path(root)
         decision_path.write_text(json.dumps({
@@ -135,21 +142,36 @@ def test_agent_activation_emits_one_canonical_portfolio():
             "reason": "Best net alpha after cost with acceptable turnover.",
         }))
 
-        result = activate_latest_selection(root)
-        canonical = Path(result["canonical_output_dir"])
+        first = activate_latest_selection(root)
+        second = activate_latest_selection(root)
+        canonical = Path(first["canonical_output_dir"])
         weights = pd.read_csv(canonical / "weights_today.csv", index_col=0)["weight"]
         state = json.loads((root / "strategy_selection" / "state.json").read_text())
         meta = json.loads((canonical / "meta.json").read_text())
 
-        assert result["source"] == "agent"
+        assert first == second
+        assert first["source"] == "agent"
         assert set(weights.index) == {"AAPL", "MSFT"}
         assert state["selected_strategy_id"] == "q23_hybrid_alpha"
         assert meta["selected_strategy_id"] == "q23_hybrid_alpha"
         assert (canonical / "execution_inputs.csv").exists()
 
+        decision_path.write_text(json.dumps({
+            "as_of": "2026-07-02",
+            "candidate_set_hash": "abc123",
+            "candidate_id": "hold_current",
+            "confidence": 0.5,
+            "reason": "Changed decision after activation.",
+        }))
+        try:
+            activate_latest_selection(root)
+            raise AssertionError("an activated board accepted a different decision")
+        except RuntimeError as exc:
+            assert "already activated" in str(exc)
+
 
 if __name__ == "__main__":
     test_registry_contains_distinct_complete_strategies()
     test_switch_requires_cost_aware_buffer()
-    test_agent_activation_emits_one_canonical_portfolio()
+    test_agent_activation_is_canonical_and_idempotent()
     print("STRATEGY SELECTION TESTS PASSED")
