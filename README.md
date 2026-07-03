@@ -1,136 +1,190 @@
 # Svyable Strategies
 
-Svyable Strategies converts the strongest price-action and portfolio ideas from [`Svyable/Q23_QUANT_SYSTEM_2`](https://github.com/Svyable/Q23_QUANT_SYSTEM_2) into a flexible daily strategy platform with one canonical Tastytrade execution path.
+Svyable Strategies is a daily cross-sectional alpha research, portfolio-management, and broker-operations platform derived from the strongest price-action ideas in [`Svyable/Q23_QUANT_SYSTEM_2`](https://github.com/Svyable/Q23_QUANT_SYSTEM_2).
 
 ```text
-shared market panel
-  -> registered Q23 strategy candidates
-  -> complete candidate portfolios
-  -> cost-aware PM/agent selection
-  -> one canonical target portfolio
+validated market panel
+  -> governed factor library
+  -> complete registered strategy portfolios
+  -> causal chimera portfolios
+  -> immutable candidate board
+  -> deterministic / agent PM selection
+  -> user-approved canonical portfolio
   -> Tastytrade sandbox execution and reconciliation
 ```
 
-The goal is not maximum conceptual complexity. The goal is an effective, inspectable system that can backtest distinct strategies, compare their next-day opportunity against their trading cost and current holdings, select one safely, and improve through reviewed daily iterations.
+The objective is effective systematic trading, not complexity for its own sake: differentiated alpha sources, controlled beta participation, robust volatility and turbulence avoidance, honest transaction costs, observable decisions, and one safe execution boundary.
 
-This README is the canonical project narrative, operating guide, capability ledger, and safety policy. When another document disagrees, this file wins.
+This README is the canonical project narrative and operating guide. Detailed institutional positioning and evidence standards are in [`docs/institutional_alpha_platform.md`](docs/institutional_alpha_platform.md).
 
 ## Current truth
 
-Svyable Strategies is **paper-operational research and execution infrastructure**. It is not yet a live-capital system.
+Svyable is **paper-operational research and execution infrastructure**. It is not yet a live-capital track record.
 
 Implemented:
 
-- Vendor-agnostic daily OHLCV panel with validation and caching.
-- Q23-derived price-action, behavioral, defensive, reversal, and daily-flow factors.
-- Purged causal IC weighting, sleeve ensembles, portfolio construction, and risk budgeting.
-- First-class strategy registry: each strategy owns its factor set, horizons, smoothing, seats, no-trade band, risk budget, cadence, and maturity.
-- Daily evaluation of multiple complete candidate portfolios on one shared data panel.
-- Cost-aware strategy selection using expected alpha, turnover, estimated trading cost, current-position overlap, risk, cadence, and minimum-hold rules.
-- Deterministic, manual, and two-phase agent selection modes.
-- Chimera blends: convex combinations of registered strategy portfolios (preset and user-defined) evaluated as first-class board candidates with netting-aware costs.
-- Turbulence avoidance: Mahalanobis turbulence and absorption-ratio regime throttle layered into the risk budget, with regime diagnostics on every candidate run.
-- Read-only Tastytrade positions used for turnover/rebalance calculations when credentials are available; canonical prior targets are the fallback.
-- One canonical selected portfolio under `outputs/svyable_nasdaq_lo/` for all Tastytrade execution workflows.
-- Streamlit strategy-selector, factor-governance, broker, rebalance, and audit surfaces.
-- Typed community `tastytrade` SDK adapter, sandbox preflight/submission, polling, cancellation, fill capture, slippage, backfill, reconciliation, and audit.
-- Duplicate strategy activation, duplicate rebalance batches, duplicate transactions, stale decisions, and ineligible agent decisions are blocked.
+- Vendor-agnostic daily OHLCV panel with validation, caching, and point-in-time processing discipline.
+- Price-action, residual, defensive, reversal, liquidity, behavioral, and clearly labeled daily-flow proxy factors.
+- Purged causal IC weighting with uncertainty, hit-rate, coverage, and redundancy controls.
+- Complete strategy registry: every strategy owns factors, construction, concentration, risk, cost, cadence, and maturity.
+- Correlation-cluster caps, score/equal/HRP/blended seat weighting, no-trade bands, and ADV-aware execution inputs.
+- Volatility targeting, drawdown controls, structural turbulence, absorption ratio, breadth, panic state, and own-book kill switch.
+- Fixed, inverse-volatility, and alpha/risk chimera portfolios with causal component-weight histories.
+- Deterministic, manual, and two-phase agent selection with immutable candidate hashes and explicit user approval.
+- Institutional scorecards covering alpha, beta, capture, tails, risk, turnover, and costs.
+- Streamlit Strategy Selector, Factor Governance, Institutional Alpha Lab, broker, rebalance, and audit surfaces.
+- Typed community `tastytrade` SDK adapter with sandbox preflight, submission, polling, cancellation, fills, slippage, delayed-fill recovery, reconciliation, and audit.
 
 Not true yet:
 
 - No live-capital performance is claimed.
-- Production bulk submission from Streamlit is disabled.
-- The registered strategy set has not yet accumulated a sustained Tastytrade sandbox operating record.
-- Historical seed-universe tests remain survivorship-biased unless explicitly labeled point-in-time.
-- Agent-selected portfolios remain subject to deterministic eligibility and execution gates.
+- Production bulk submission from Streamlit remains disabled.
+- The strategy and chimera registry has not yet accumulated a sustained Tastytrade sandbox operating record.
+- Seed-universe historical tests remain survivorship-biased unless explicitly labeled point-in-time.
+- Institutional metrics are engineering evidence, not promised future returns.
+
+## Alpha architecture
+
+The factor stack stays inside the current daily OHLCV and liquidity contract.
+
+### Trend and continuation
+
+- 12-1, intermediate, residual, and short residual momentum
+- frog-in-the-pan / information-continuity momentum
+- multi-horizon risk-adjusted trend
+- residual trend t-statistic
+- trend consistency, persistence, acceleration, and quality
+- 52-week-high proximity, breakout, and volume-confirmed breakout
+- efficiency ratio, EMA slope, and CAPM alpha
+
+### Reversal and statistical state
+
+- short-term and residual reversal
+- Ornstein-Uhlenbeck z-score, predicted return, and momentum/reversion blend
+- mean-reversion speed and disposition-state signals
+
+### Defensive, beta, and resilience
+
+- inverse volatility, downside volatility, and range volatility
+- low beta, beta stability, and idiosyncratic volatility
+- conditional downside-beta resilience
+- upside/downside beta asymmetry
+- drawdown and overnight-gap resilience
+- low market correlation and correlation-shock resilience
+- liquidity, turnover stability, skew, kurtosis, and lottery-risk controls
+
+### Flow and nonlinear research
+
+- daily-bar OFI, VPIN, Kyle, BVC, execution-quality, and flow-persistence proxies remain shadow research
+- optional purged histogram-gradient-boosting ML sleeve for nonlinear interactions
+
+Adding a factor does not silently change every portfolio. A strategy uses only its explicit factor set.
 
 ## Strategy registry
 
-A strategy is a complete executable recipe, not merely a factor profile.
+A strategy is a complete executable mandate, not a loose factor profile.
 
-The active registry includes:
-
-| Strategy | Purpose | Default |
+| Strategy | Institutional role | Default |
 |---|---|---:|
-| `q23_neural_alpha` | Broad Q23 behavioral/price-action ensemble with nonlinear ML sleeve | Yes |
-| `q23_hybrid_alpha` | Balanced momentum, defensive, OU/reversal, and daily-flow ensemble | Yes |
-| `q23_concentrated` | Contest-identity flagship: 7-10 names at roughly 10% apiece, full Q23 ensemble, concentration via construction | Yes |
-| `q23_momentum_quality` | Trend continuation and momentum-quality strategy | Yes |
-| `q23_ou_mean_reversion` | Faster residual reversal and OU strategy | Yes |
-| `q23_defensive_alpha` | Lower-risk, lower-volatility stressed-regime candidate | Yes |
-| `q23_low_turnover` | Slow-moving ensemble with wider no-trade bands | Yes |
-| `q23_flow_alpha` | Daily-bar order-flow proxy strategy | Experimental / off |
+| `q23_neural_alpha` | nonlinear broad alpha ensemble | Yes |
+| `q23_hybrid_alpha` | diversified core alpha | Yes |
+| `q23_concentrated` | 7–10-name high-conviction flagship | Yes |
+| `q23_momentum_quality` | medium-horizon continuation | Yes |
+| `q23_ou_mean_reversion` | short-horizon statistical reversal | Yes |
+| `q23_defensive_alpha` | drawdown and beta defense | Yes |
+| `q23_low_turnover` | capacity and implementation core | Yes |
+| `q23_alpha_beta` | calm-regime beta participation with asymmetric defense | Yes |
+| `q23_crash_resilient_momentum` | momentum alpha with crash controls | Yes |
+| `q23_residual_alpha` | beta-stripped stock-selection alpha | Yes |
+| `q23_dispersion_alpha` | cross-sectional relative-value opportunity | Yes |
+| `q23_flow_alpha` | daily-bar microstructure research proxy | Experimental / off |
 
-Definitions live in `engine/svyable/strategy_registry.py`. Adding a factor to the factor registry does not silently alter every strategy. A factor affects a strategy only when that strategy explicitly includes it.
+Definitions live in `engine/svyable/strategy_registry.py`.
 
-Each registered strategy specifies:
+Each mandate specifies:
 
-- Factors and sleeves
-- Portfolio seats and concentration
-- Score and weight smoothing
-- No-trade band
-- Target volatility and risk limits
-- Expected rebalance cadence
-- Minimum holding period before switching
-- Transaction-cost assumptions
-- Maturity and default-enabled state
+- factor membership and sleeves;
+- seats, concentration, and correlation-cluster caps;
+- score and weight smoothing;
+- no-trade band and transaction-cost assumptions;
+- target and stressed volatility;
+- turbulence thresholds and permitted risk-on boost;
+- rebalance cadence and minimum holding period;
+- maturity, pitch role, and regime profile.
 
-## Daily strategy selection
+## Chimera portfolios
 
-Every candidate is run through the full pipeline and produces its own target weights, backtest diagnostics, risk state, factor evidence, and execution inputs.
+A chimera is a convex combination of complete registered portfolios, materialized and evaluated as one candidate book.
+
+| Chimera | Components | Method |
+|---|---|---|
+| `chimera_flagship_shield` | concentrated flagship + defensive alpha | fixed |
+| `chimera_trend_reversion` | momentum quality + OU reversal | fixed |
+| `chimera_all_weather` | hybrid + defensive + low turnover | fixed |
+| `chimera_adaptive` | flagship + trend + reversal + defensive | inverse volatility |
+| `chimera_institutional_alpha` | alpha/beta + crash-managed momentum + residual + defensive | alpha/risk |
+| `chimera_opportunity_stack` | concentrated + dispersion + reversal + capacity | alpha/risk |
+
+Dynamic chimeras use only lagged component returns. Component weights are bounded, smoothed, and persisted through time. Historical portfolio weights and transaction costs are rebuilt after component trade netting; today’s allocation is never applied retroactively to the full backtest.
+
+Users may define additional chimeras through persisted policy data. The GUI and agent select only materialized candidate IDs; neither may author security weights.
+
+## Volatility, turbulence, and beta control
+
+The risk stack combines:
+
+1. EWMA portfolio-volatility targeting;
+2. market drawdown throttling;
+3. a trailing-volatility overlay;
+4. robust Mahalanobis cross-asset turbulence;
+5. absorption ratio / systemic coupling;
+6. market breadth deterioration;
+7. a high-volatility drawdown panic state;
+8. strategy-specific correlation-cluster caps;
+9. an own-book drawdown kill switch.
+
+The composite regime multiplier primarily removes exposure. A small, separately capped beta boost is allowed only when breadth is strong, turbulence is quiet, and the panic state is inactive. Defensive mandates disable that boost and use stricter floors.
+
+Regime artifacts expose turbulence percentile, absorption, breadth, panic signal, composite risk, throttle, boost, and final multiplier.
+
+## Candidate selection
+
+Every enabled strategy runs through the full backtest and artifact pipeline. Eligible chimeras are then built from those results.
 
 The selector compares:
 
-- Causal expected next-day alpha
-- Alpha confidence and observation history
-- One-way turnover from current holdings, including the cash leg
-- Largest required weight change
-- Estimated transaction cost
-- Sign-aware current-position overlap
-- Recent 63-day and 252-day return
-- Recent Sharpe, volatility, and drawdown
-- Typical recent turnover
-- Trading-session rebalance cadence
-- Minimum-hold lock
-- Kill-switch state
+- causal expected next-day alpha and confidence;
+- cash-aware one-way turnover and largest required change;
+- estimated costs and turnover penalty;
+- current-position overlap;
+- recent return, Sharpe, volatility, and drawdown;
+- cadence, minimum-hold lock, and kill-switch state;
+- cost-aware utility versus `hold_current`.
 
-A `hold_current` candidate is always included. A strategy switch must beat holding after costs and the configured switch buffer. Choosing daily does **not** imply trading daily.
-
-### Chimera blends
-
-A chimera is a convex combination of registered strategy portfolios — hybrid strategy weights deployed as one book. Definitions live in `engine/svyable/strategy_blend.py` (presets) or in the persisted selection policy (user-defined, built in the GUI). Component weights are either fixed in the definition or derived by a deterministic rule (inverse volatility with exact 10–50% clamps); they are never authored by the GUI or the agent.
-
-Blending happens at the portfolio level on the day's candidate results. Costs are honest: the cost model re-runs on the blended weights history, so trade netting between components (a trend buy cancelling a reversal sell) is measured rather than averaged away. Every chimera writes the full candidate artifact contract, so eligibility gates, agent decisions, and activation treat it identically to a single strategy.
-
-Preset chimeras:
-
-| Blend | Composition | Method |
-|---|---|---|
-| `chimera_flagship_shield` | 70% concentrated flagship + 30% defensive alpha | fixed |
-| `chimera_trend_reversion` | 50% momentum quality + 50% OU mean reversion | fixed |
-| `chimera_all_weather` | 40% hybrid + 30% defensive + 30% low turnover | fixed |
-| `chimera_adaptive` | flagship / trend / reversal / defensive | inverse-vol risk parity |
-
-A blend is evaluated only when every component strategy is enabled; otherwise it sits out that board. An active chimera enforces its own minimum-hold lock like any strategy.
-
-### Turbulence avoidance
-
-Two causal regime signals (`engine/svyable/turbulence.py`) throttle the risk budget between the volatility overlay and the kill switch:
-
-- **Mahalanobis turbulence** (Kritzman–Li): distance of each day's cross-asset return vector from a robust normal-times model. The model drops the most turbulent 20% of estimation days before refitting, so a sustained crisis stays flagged instead of annexing the covariance.
-- **Absorption ratio**: variance share of the top principal components on a shorter window — how tightly coupled the market currently is.
-
-The composite throttle only ever removes exposure (floor at `turb_floor`, default 0.60), is percentile-normalized so it self-calibrates across regimes, and is fully causal (verified by truncation tests). Regime diagnostics are written as a per-run artifact and surfaced in the strategy-selector GUI.
+`hold_current` is always available. Evaluating daily does not imply trading daily.
 
 ### Position source
 
-The selector first attempts a read-only Tastytrade account snapshot. When available, candidate turnover is measured against actual equity positions. If broker state is unavailable, it falls back to the last canonical selected target.
+The daily job first attempts a read-only Tastytrade account snapshot. Candidate turnover is measured from actual equity holdings when available and from the last canonical target otherwise. The starting-position snapshot is bound to the candidate-board hash.
 
-The exact starting-position snapshot is bound to the candidate-board hash and reused during activation.
+## Institutional scorecard
 
-## Selection modes
+Every strategy and chimera persists:
 
-Policy is persisted at:
+- annualized return and volatility;
+- Sharpe, Sortino, Calmar, and information ratio;
+- maximum drawdown, skew, kurtosis, and daily tail ratio;
+- regression alpha and market beta;
+- market correlation;
+- upside and downside capture and capture spread;
+- active return and active volatility;
+- position count, gross exposure, turnover, and cost evidence.
+
+The **Institutional Alpha Lab** displays the candidate frontier, alpha-versus-beta plot, NAV evidence, current target weights, factor inventory, regime history, and causal chimera allocation history.
+
+## Selection modes and approval
+
+Policy lives at:
 
 ```text
 engine/outputs/strategy_selection/policy.json
@@ -138,24 +192,31 @@ engine/outputs/strategy_selection/policy.json
 
 ### Deterministic
 
-The selector activates the highest eligible cost-aware utility candidate. It holds the existing portfolio unless a candidate clears the switch/rebalance buffer.
+Selects and activates the highest eligible cost-aware candidate, subject to switch and rebalance buffers.
 
 ### Manual
 
-The configured enabled strategy is selected when it passes all eligibility gates. The GUI never permits direct weight editing.
+Selects one configured enabled registered strategy when it passes all gates.
 
 ### Agent
 
 Agent mode is deliberately two-phase:
 
-1. Deterministic code evaluates candidates and writes an immutable board.
-2. Claude or another PM agent chooses one eligible `candidate_id`.
-3. Deterministic activation validates the date, board hash, candidate identity, and eligibility.
-4. One canonical portfolio is emitted.
+1. deterministic code writes an immutable strategy-and-chimera board;
+2. the PM agent reviews board metrics and candidate artifacts;
+3. the agent writes one hash-matched eligible proposal;
+4. the GUI presents the proposal and supporting evidence;
+5. the user approves or rejects it;
+6. deterministic activation validates the date, hash, candidate, and eligibility;
+7. exactly one canonical portfolio is emitted.
 
-The agent may choose a strategy or a chimera blend from the board (the `components` column carries each blend's exact composition). It may not construct weights, edit factors, mutate config, or bypass risk/execution controls. In agent mode nothing trades until a human approves the proposal — via the GUI's "Approve & activate" button or `python -m svyable.strategy_activate`.
+The agent may choose a strategy, chimera, or `hold_current`. It may not edit weights, factors, code, or policy during the morning review.
 
-Candidate artifacts:
+See `ops/CLAUDE_LOOP.md`.
+
+## Canonical artifacts
+
+Candidate board:
 
 ```text
 outputs/strategy_selection/<tag>/candidate_board.csv
@@ -165,43 +226,28 @@ outputs/strategy_selection/<tag>/agent_decision_template.json
 outputs/strategy_selection/<tag>/activation.json
 ```
 
-Canonical activated artifacts:
+Per-candidate evidence may include:
 
 ```text
-outputs/svyable_nasdaq_lo/<tag>/weights_today.csv
-outputs/svyable_nasdaq_lo/<tag>/weights_history.csv
-outputs/svyable_nasdaq_lo/<tag>/execution_inputs.csv
-outputs/svyable_nasdaq_lo/<tag>/morning_report.md
-outputs/svyable_nasdaq_lo/<tag>/meta.json
+weights_today.csv
+weights_history.csv
+pnl_diag.csv
+institutional_metrics.csv
+factor_catalog.csv
+regime.csv
+component_weights_history.csv
+execution_inputs.csv
+meta.json
+morning_report.md
 ```
 
-Tastytrade reads only the canonical path. Candidate directories are never executable order sources.
-
-## Architecture
+Activated canonical portfolio:
 
 ```text
-DataProvider
-  -> shared Panel(time x asset OHLCV)
-  -> shared compatible factor caches
-  -> Strategy Registry
-      -> Q23 Neural Alpha candidate
-      -> Hybrid candidate
-      -> Momentum candidate
-      -> OU/reversal candidate
-      -> Defensive candidate
-      -> Low-turnover candidate
-  -> per-strategy IC / sleeves / construction / risk / backtest
-  -> immutable Candidate Board
-  -> deterministic, manual, or hash-validated agent selection
-  -> idempotent activation
-  -> canonical target weights + price / ADV / liquidity evidence
-  -> target-vs-actual rebalance plan
-  -> ADV caps and Tastytrade broker preflight
-  -> sandbox submission / polling / fills
-  -> slippage / fees / reconciliation / ledger / PM review
+outputs/svyable_nasdaq_lo/<tag>/
 ```
 
-Strategy math remains independent of the data vendor and broker. Broker details stay behind adapters, and strategy selection stays separate from order construction.
+Tastytrade consumes only the canonical activated path.
 
 ## Install
 
@@ -232,33 +278,27 @@ Never commit `.env`.
 
 ## Run
 
-### Evaluate and select automatically
+Evaluate and activate in deterministic/manual mode:
 
 ```bash
-cd engine
-source .venv/bin/activate
 python -m svyable.strategy_daily --start 2020-01-01
 ```
 
-In deterministic or manual mode, this evaluates candidates and activates one canonical portfolio.
-
-### Agent mode
+Agent proposal and approved activation:
 
 ```bash
 python -m svyable.strategy_daily --start 2020-01-01
-# Agent or PM reviews candidate_board.csv and writes agent_decision.json
+# Review in Strategy Selector and Institutional Alpha Lab
 python -m svyable.strategy_activate
 ```
 
-The activation command rejects stale hashes, unknown or ineligible candidates, and attempts to change an already activated board.
-
-### Evaluate without activation
+Evaluate without activation:
 
 ```bash
 python -m svyable.strategy_daily --start 2020-01-01 --evaluate-only
 ```
 
-### Backtest and research
+Research:
 
 ```bash
 python -m svyable.cli --start 2020-01-01 backtest --trials 20
@@ -266,128 +306,82 @@ python -m svyable.cli --start 2020-01-01 factors
 python -m svyable.cli --start 2020-01-01 walkforward
 ```
 
-### Launch the PM console
+Launch the console:
 
 ```bash
 python -m svyable.ui
 ```
 
-The Streamlit multipage console includes:
+Pages:
 
-- **Strategy Selector** — inspect recipes, edit policy, rerun candidates, review the board, write a decision, and activate
-- **Factor Governance** — factor maturity, ICIR, hit rate, breadth, coverage, and weights
-- **Overview** — run health, drift, warnings, and execution quality
-- **Strategy** — canonical selected portfolio and morning report
-- **Broker** — account, positions, orders, quotes, cancellation, and reconciliation
-- **Rebalance** — ADV-aware target-vs-actual plan, broker preflight, and sandbox submission
-- **Audit** — orders, fills, slippage, fees, delayed-fill backfill, and operational events
+- **Strategy Selector** — recipes, policies, chimeras, candidate board, proposal, approval, activation
+- **Factor Governance** — maturity, ICIR, hit rate, breadth, coverage, and weights
+- **Institutional Alpha Lab** — alpha/beta frontier, captures, regime, factors, portfolio, and chimera history
+- **Overview / Strategy** — operational health and canonical portfolio
+- **Broker / Rebalance / Audit** — Tastytrade state, preflight, sandbox execution, fills, and reconciliation
 
 ## Safety invariants
 
 - Sandbox is the default.
-- The agent selects only registered candidates; it never supplies weights.
-- Candidate boards are immutable and hash-addressed.
-- Strategy activation is idempotent and one-time per board.
+- Production bulk submission remains disabled.
+- Candidate and component weights are deterministic and immutable after hashing.
+- The agent selects only an eligible candidate ID.
+- User approval is required before agent-mode activation.
+- Strategy/chimera activation is one-time and idempotent per board.
 - Actual broker positions are read-only during selection.
 - `hold_current` is always available.
-- Minimum-hold, cadence, turnover, alpha, kill-switch, and cost-aware buffer gates apply before selection.
-- Stale execution artifacts, missing quotes, missing ADV, and liquidity violations block broker preflight.
-- ADV participation limits apply before order submission.
-- Every sandbox order is normalized, audited, and broker-preflighted.
-- Broker warnings or errors block submission.
-- Duplicate rebalance batches and duplicate fill transactions are blocked.
-- Production bulk submission remains disabled.
-- `SVYABLE_ENABLE_LIVE=false` remains the default until all production gates pass.
+- Minimum-hold, cadence, turnover, alpha, cost, regime, and kill-switch gates apply before activation.
+- Missing quotes, stale artifacts, missing ADV, or liquidity violations block broker preflight.
+- Every order is normalized, audited, and broker-preflighted.
+- Duplicate batches and duplicate transactions are blocked.
+- `SVYABLE_ENABLE_LIVE=false` remains the default until production gates pass.
 
-## Factor and IC principles
+## Research and performance language
 
-The factor stack intentionally emphasizes effective price action rather than accumulating complexity for its own sake.
-
-- Missing observations remain missing during IC estimation.
-- IC is evaluated only on pairwise-valid tradable assets.
-- IC is purged before it can affect weights.
-- Factor trust accounts for IC mean, uncertainty, hit rate, coverage, and redundancy.
-- Daily-bar OFI/VPIN/Kyle/BVC measures remain clearly identified as proxies.
-- Shadow factors and the ML sleeve have no guaranteed allocation.
-- Strategy definitions choose which factors matter; research additions do not silently alter production candidates.
-
-See `docs/factor_governance.md`.
-
-## Daily PM loop
-
-1. Refresh and validate the shared panel.
-2. Read actual Tastytrade positions when available.
-3. Compute all enabled registered candidate portfolios.
-4. Write the immutable candidate board.
-5. Select deterministically, manually, or through a hash-validated agent decision.
-6. Activate exactly one canonical portfolio.
-7. Review the canonical morning report and Tastytrade dry-run plan.
-8. Human-trigger sandbox execution during the validation era.
-9. Poll, capture/backfill fills, score slippage, and reconcile actual positions.
-10. Feed the evidence into the next reviewed strategy iteration.
-
-The detailed agent contract is in `ops/CLAUDE_LOOP.md`.
-
-## Production gates
-
-No live-capital operation until:
-
-### Data correctness
-
-- Point-in-time universe data covers the operating history.
-- Staleness, holidays, restatements, and vendor changes are observable.
-- Every result states source, range, universe, and survivorship status.
-
-### Strategy reproducibility
-
-- Each registered strategy has walk-forward and sensitivity evidence.
-- Behavior-changing edits are protected by regression/golden tests.
-- Candidate selection is reproducible from board, policy, state, and position snapshot.
-- Agent choices remain within the immutable candidate set.
-
-### Execution safety
-
-- Tastytrade authentication and refresh are reliable.
-- Intended, preflighted, submitted, filled, and actual positions reconcile.
-- Slippage, fees, delayed fills, and drift are observable.
-- Failure escalation and heartbeat monitoring are operational.
-- A sustained sandbox record demonstrates repeatability across strategy switches and holds.
-
-## Performance language
-
-- **Q23 research result** — produced by the predecessor harness.
-- **Svyable candidate backtest** — historical engineering/research evidence for a registered strategy.
-- **Selection estimate** — causal forecast used to compare candidates; not a promised return.
+- **Q23 research result** — predecessor-harness evidence.
+- **Svyable candidate backtest** — historical engineering evidence for one registered mandate.
+- **Selection estimate** — causal comparison forecast, not a promised return.
 - **Sandbox result** — produced through paper/sandbox execution.
 - **Live result** — produced with real capital. None are claimed here.
 
-Reference Q23 proof point: `q23_neural_alpha`, 2025 under contest constraints — 63.58% annual, Sharpe 3.545, MaxDD -5.67%, and 58.02% net of contest-model costs. It motivates the port; it is not a live Svyable result.
+Reference Q23 proof point: `q23_neural_alpha`, 2025 under contest constraints — 63.58% annual return, Sharpe 3.545, maximum drawdown -5.67%, and 58.02% net of the contest cost model. It motivates the port; it is not a live Svyable result.
+
+## Production gates
+
+No live-capital path until:
+
+- point-in-time universe and survivorship controls cover the operating history;
+- every mandate has walk-forward, subperiod, sensitivity, and capacity evidence;
+- factor and strategy correlations are understood in calm and stressed regimes;
+- multiple-testing controls accompany strategy and factor selection;
+- candidate selection is reproducible from policy, inputs, artifacts, and hashes;
+- Tastytrade authentication, fills, fees, slippage, delayed transactions, and reconciliation are reliable;
+- a sustained sandbox record demonstrates holds, switches, chimeras, partial fills, and failure recovery.
 
 ## Repository map
 
 ```text
-README.md                                   canonical narrative and operations guide
-engine/svyable/strategy_registry.py         complete registered strategy recipes
-engine/svyable/strategy_selector.py         candidate evaluation and policy selection
-engine/svyable/strategy_activation.py       validated one-time canonical activation
-engine/svyable/strategy_daily.py            weekday candidate runner
-engine/svyable/strategy_activate.py         activation CLI
-engine/svyable/pipeline.py                  reusable strategy pipeline
-engine/svyable/factors.py                   Q23-derived flat factor registry
-engine/svyable/weighting.py                 purged causal IC implementation
-engine/svyable/tastytrade_sdk.py            typed community-SDK broker adapter
-engine/svyable/execution_control.py          planning, polling, and reconciliation
-engine/svyable/execution_quality.py          fill normalization and slippage
-engine/svyable/pages/1_Strategy_Selector.py  PM/agent strategy GUI
-engine/svyable/pages/2_Factor_Governance.py  factor governance GUI
-engine/tests/                                offline regression suite
-ops/CLAUDE_LOOP.md                           scheduled agent/PM contract
+README.md                                      canonical narrative and operations guide
+docs/institutional_alpha_platform.md           institutional architecture and evidence standard
+engine/svyable/factor_institutional.py          beta, trend, and resilience extensions
+engine/svyable/strategy_registry.py             complete strategy mandates
+engine/svyable/strategy_blend.py                causal chimera engine
+engine/svyable/strategy_selector.py             candidate board and PM policy
+engine/svyable/turbulence.py                    turbulence, absorption, breadth, and panic
+engine/svyable/pipeline.py                      reusable candidate pipeline and artifacts
+engine/svyable/metrics.py                       institutional performance scorecard
+engine/svyable/tastytrade_sdk.py                typed broker adapter
+engine/svyable/pages/1_Strategy_Selector.py     proposal and approval GUI
+engine/svyable/pages/2_Factor_Governance.py     factor governance GUI
+engine/svyable/pages/3_Alpha_Lab.py             institutional observability GUI
+engine/tests/                                   offline regression suite
+ops/CLAUDE_LOOP.md                              morning agent and approval contract
 ```
 
 ## Next actions
 
-1. Run the registered candidate board against the real Tastytrade sandbox account.
-2. Accumulate daily candidate, selection, hold/switch, turnover, and execution evidence.
-3. Calibrate selector alpha/cost/switch buffers from the sandbox record rather than intuition.
-4. Add or retire Q23 strategy recipes through reviewed registry changes and walk-forward evidence.
-5. Establish a sustained sandbox operating record before considering any live-capital path.
+1. Run all strategy and chimera candidates against the configured Tastytrade sandbox account.
+2. Accumulate daily proposal, approval, hold/switch, turnover, fill, and slippage evidence.
+3. Calibrate alpha, cost, component bounds, and switch buffers from that operating record.
+4. Add point-in-time universe history and formal capacity/market-impact studies.
+5. Retire or promote factors, strategies, and chimeras only through reviewed walk-forward evidence.

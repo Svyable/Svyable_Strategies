@@ -9,15 +9,15 @@ from typing import Any
 
 import pandas as pd
 
-from svyable.panel import Panel
-from svyable.config import SvyableConfig
 from svyable import factor_library as flib
-from svyable.sleeves import build_ensemble, SleeveResult
-from svyable.construct import build_unit_weights, ConstructResult
-from svyable.risk import apply_risk_budget, backtest_pnl, RiskResult
-from svyable.ml import ml_sleeve_score
-from svyable.metrics import perf_summary, deflated_sharpe
 from svyable.artifacts import ArtifactWriter, morning_report
+from svyable.config import SvyableConfig
+from svyable.construct import ConstructResult, build_unit_weights
+from svyable.metrics import deflated_sharpe, perf_summary
+from svyable.ml import ml_sleeve_score
+from svyable.panel import Panel
+from svyable.risk import RiskResult, apply_risk_budget, backtest_pnl
+from svyable.sleeves import SleeveResult, build_ensemble
 
 
 @dataclass
@@ -45,17 +45,25 @@ def run_pipeline(
     run_context: dict[str, Any] | None = None,
 ) -> RunResult:
     data_report = panel.validate()
-    selected_factors = tuple(factor_names or sorted(flib.factor_metadata().index))
+    selected_factors = tuple(
+        factor_names or sorted(flib.factor_metadata().index)
+    )
 
     if precomputed_factors is None:
         factors = flib.compute_all(panel, cfg, names=list(selected_factors))
     else:
-        missing = [name for name in selected_factors if name not in precomputed_factors]
+        missing = [
+            name for name in selected_factors
+            if name not in precomputed_factors
+        ]
         if missing:
             raise ValueError(
                 "Precomputed factor cache is missing: " + ", ".join(missing)
             )
-        factors = {name: precomputed_factors[name] for name in selected_factors}
+        factors = {
+            name: precomputed_factors[name]
+            for name in selected_factors
+        }
     catalog = flib.factor_metadata(factors)
 
     extra = {}
@@ -70,7 +78,11 @@ def run_pipeline(
         extra_sleeve_scores=extra,
         factors=factors,
     )
-    liquidity = panel.liquidity_mask(cfg.min_adv, cfg.min_price, cfg.adv_win)
+    liquidity = panel.liquidity_mask(
+        cfg.min_adv,
+        cfg.min_price,
+        cfg.adv_win,
+    )
     construction = build_unit_weights(
         ensemble.score,
         panel.ret,
@@ -85,6 +97,7 @@ def run_pipeline(
         cfg,
     )
     pnl = backtest_pnl(risk.final_weights, panel.ret, cfg)
+    pnl["benchmark_ret"] = panel.market_ret.reindex(pnl.index)
 
     use_tag = tag or datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = None
@@ -96,15 +109,23 @@ def run_pipeline(
         last = risk.final_weights.index[-1]
         weights_today = risk.final_weights.loc[last]
         weights_previous = (
-            risk.final_weights.iloc[-2] if len(risk.final_weights) > 1 else None
+            risk.final_weights.iloc[-2]
+            if len(risk.final_weights) > 1
+            else None
         )
         prices_today = panel.close.loc[last].dropna().rename("price")
-        adv_today = panel.adv(cfg.adv_win).loc[last].dropna().rename("adv_dollars")
+        adv_today = panel.adv(cfg.adv_win).loc[last].dropna().rename(
+            "adv_dollars"
+        )
         liquid_today = (
-            liquidity.loc[last].fillna(False).astype(bool).rename("is_liquid")
+            liquidity.loc[last]
+            .fillna(False)
+            .astype(bool)
+            .rename("is_liquid")
         )
         execution_inputs = pd.concat(
-            [prices_today, adv_today, liquid_today], axis=1
+            [prices_today, adv_today, liquid_today],
+            axis=1,
         ).sort_index()
 
         writer.write_frame(
@@ -120,10 +141,11 @@ def run_pipeline(
         writer.write_frame("pnl_diag", pnl)
         writer.write_frame("execution_inputs", execution_inputs)
         if risk.regime is not None:
-            writer.write_frame("regime", risk.regime.iloc[-252:])
+            writer.write_frame("regime", risk.regime.iloc[-504:])
         for name, factor_weights in ensemble.factor_weights.items():
             writer.write_frame(
-                f"factor_weights_{name}", factor_weights.iloc[-21:]
+                f"factor_weights_{name}",
+                factor_weights.iloc[-21:],
             )
         for name, health in ensemble.factor_health.items():
             writer.write_frame(f"factor_health_{name}", health)
@@ -131,6 +153,10 @@ def run_pipeline(
         recent = perf_summary(
             pnl["net_ret"].iloc[-252:],
             benchmark=panel.market_ret.iloc[-252:],
+        )
+        writer.write_frame(
+            "institutional_metrics",
+            pd.Series(recent, name="value"),
         )
         report = morning_report(
             strategy_id=cfg.strategy_id,
@@ -150,6 +176,17 @@ def run_pipeline(
         writer.write_report(report)
 
         stages = catalog["stage"].value_counts().to_dict()
+        regime_columns = [
+            "turb_pct",
+            "absorption",
+            "breadth",
+            "panic_signal",
+            "regime_risk",
+            "throttle",
+            "risk_on_signal",
+            "boost",
+            "multiplier",
+        ]
         writer.write_meta(
             {
                 "strategy_id": cfg.strategy_id,
@@ -174,20 +211,30 @@ def run_pipeline(
                 "regime": (
                     {
                         column: (
-                            round(float(series.dropna().iloc[-1]), 4)
-                            if series.notna().any()
+                            round(
+                                float(
+                                    risk.regime[column]
+                                    .dropna()
+                                    .iloc[-1]
+                                ),
+                                4,
+                            )
+                            if column in risk.regime
+                            and risk.regime[column].notna().any()
                             else None
                         )
-                        for column, series in risk.regime[
-                            ["turb_pct", "absorption", "throttle"]
-                        ].items()
+                        for column in regime_columns
                     }
                     if risk.regime is not None
                     else None
                 ),
                 "execution_inputs": {
-                    "date": str(last.date() if hasattr(last, "date") else last),
-                    "price_count": int(execution_inputs["price"].notna().sum()),
+                    "date": str(
+                        last.date() if hasattr(last, "date") else last
+                    ),
+                    "price_count": int(
+                        execution_inputs["price"].notna().sum()
+                    ),
                     "adv_count": int(
                         execution_inputs["adv_dollars"].notna().sum()
                     ),
@@ -223,11 +270,21 @@ def backtest_report(
     return {
         "full_period": perf_summary(net, benchmark=panel.market_ret),
         "deflated_sharpe": deflated_sharpe(net, n_trials=n_trials),
-        "avg_daily_turnover": round(float(result.pnl["turnover"].mean() / 2), 4),
-        "tc_drag_annual": round(float(result.pnl["tc"].mean() * 252), 4),
-        "avg_gross": round(float(result.pnl["gross_exposure"].mean()), 3),
+        "avg_daily_turnover": round(
+            float(result.pnl["turnover"].mean() / 2),
+            4,
+        ),
+        "tc_drag_annual": round(
+            float(result.pnl["tc"].mean() * 252),
+            4,
+        ),
+        "avg_gross": round(
+            float(result.pnl["gross_exposure"].mean()),
+            3,
+        ),
         "no_trade_band_held_frac": round(
-            float(result.construct.held_days.mean()), 3
+            float(result.construct.held_days.mean()),
+            3,
         ),
         "kill_switch_days": int(result.risk.kill_switch.sum()),
         "config_hash": cfg.config_hash(),
