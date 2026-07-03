@@ -119,6 +119,8 @@ def run_pipeline(
         writer.write_frame("factor_catalog", catalog)
         writer.write_frame("pnl_diag", pnl)
         writer.write_frame("execution_inputs", execution_inputs)
+        if risk.regime is not None:
+            writer.write_frame("regime", risk.regime.iloc[-252:])
         for name, factor_weights in ensemble.factor_weights.items():
             writer.write_frame(
                 f"factor_weights_{name}", factor_weights.iloc[-21:]
@@ -169,6 +171,20 @@ def run_pipeline(
                     "tradable_universe_ic": True,
                     "precomputed_cache": precomputed_factors is not None,
                 },
+                "regime": (
+                    {
+                        column: (
+                            round(float(series.dropna().iloc[-1]), 4)
+                            if series.notna().any()
+                            else None
+                        )
+                        for column, series in risk.regime[
+                            ["turb_pct", "absorption", "throttle"]
+                        ].items()
+                    }
+                    if risk.regime is not None
+                    else None
+                ),
                 "execution_inputs": {
                     "date": str(last.date() if hasattr(last, "date") else last),
                     "price_count": int(execution_inputs["price"].notna().sum()),

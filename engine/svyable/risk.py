@@ -24,6 +24,7 @@ class RiskResult:
     throttle: pd.Series
     realized_vol: pd.Series
     kill_switch: pd.Series      # 1.0 on days the kill rule is tripped
+    regime: pd.DataFrame | None = None   # turbulence/absorption diagnostics
 
 
 def ewma_vol(port_ret: pd.Series, lam: float) -> pd.Series:
@@ -56,6 +57,15 @@ def apply_risk_budget(unit_weights: pd.DataFrame, returns: pd.DataFrame,
 
     budget = (budget * overlay).clip(cfg.lev_min, cfg.lev_cap)
 
+    # turbulence throttle: Mahalanobis distance + absorption ratio react to
+    # correlation breaks and systemic coupling before realized vol can
+    regime = None
+    if cfg.turbulence_enabled:
+        from svyable.turbulence import regime_frame
+
+        regime = regime_frame(returns, cfg)
+        budget = (budget * regime["throttle"]).clip(cfg.lev_min, cfg.lev_cap)
+
     # kill switch: own-book drawdown breaches mult x sanctioned backtest MaxDD
     scaled_ret = port_ret * budget.shift(1).fillna(cfg.lev_min)
     own_dd = market_drawdown(scaled_ret, cfg.dd_win)
@@ -71,6 +81,7 @@ def apply_risk_budget(unit_weights: pd.DataFrame, returns: pd.DataFrame,
         throttle=throttle,
         realized_vol=vol,
         kill_switch=kill,
+        regime=regime,
     )
 
 
