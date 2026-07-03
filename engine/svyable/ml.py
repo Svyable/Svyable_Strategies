@@ -1,12 +1,8 @@
-"""ML cross-sectional sleeve (strategy.md §13, Gu-Kelly-Xiu style, home-scale).
+"""Purged nonlinear cross-sectional ML sleeve.
 
-Ridge regression on the stacked factor matrix -> cross-sectionally demeaned
-forward returns. Refit every `ml_refit_every` days on a trailing window with a
-purge gap of the forward horizon (no train/predict overlap). Predictions are
-z-scored per day and enter the ensemble as one more sleeve — the sleeve-level
-IC meta-learner decides how much to trust it.
-
-Degrades to None (sleeve skipped) if scikit-learn is not installed.
+The primary model is histogram gradient boosting with a deterministic ridge
+fallback. Targets are cross-sectional forward-return ranks. Training windows
+are purged by the forecast horizon and weighted toward recent observations.
 """
 
 from __future__ import annotations
@@ -14,47 +10,74 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from svyable.panel import EPS, Panel, cs_zscore, forward_returns
+from svyable.panel import Panel, cs_zscore, forward_returns
 from svyable.config import SvyableConfig
+from svyable.ml_nonlinear import fit_cross_sectional_model, time_decay_weights
 
 
-def ml_sleeve_score(factors: dict[str, pd.DataFrame], panel: Panel,
-                    cfg: SvyableConfig) -> pd.DataFrame | None:
+def ml_sleeve_score(
+    factors: dict[str, pd.DataFrame],
+    panel: Panel,
+    cfg: SvyableConfig,
+) -> pd.DataFrame | None:
     if not cfg.ml_enabled:
         return None
     try:
-        from sklearn.linear_model import Ridge
+        import sklearn  # noqa: F401
     except ImportError:
         return None
 
     names = sorted(factors)
-    idx, cols = panel.close.index, panel.close.columns
-    T, N, F = len(idx), len(cols), len(names)
+    index, columns = panel.close.index, panel.close.columns
+    T, N, F = len(index), len(columns), len(names)
     if T < cfg.ml_train_win + cfg.ml_horizon + cfg.ml_refit_every:
         return None
 
-    A = np.stack([np.nan_to_num(factors[n].to_numpy(dtype=np.float32)) for n in names],
-                 axis=2)                                   # (T, N, F)
-    fwd = forward_returns(panel.close, cfg.ml_horizon)
-    y = fwd.sub(fwd.mean(axis=1), axis=0).to_numpy(dtype=np.float32)  # demeaned target
+    array = np.stack(
+        [factors[name].to_numpy(dtype=np.float32) for name in names],
+        axis=2,
+    )
+    forward = forward_returns(panel.close, cfg.ml_horizon)
+    target = forward.rank(axis=1, pct=True).sub(0.5).to_numpy(dtype=np.float32)
 
-    preds = np.full((T, N), np.nan, dtype=np.float32)
+    predictions = np.full((T, N), np.nan, dtype=np.float32)
     model = None
-    h = cfg.ml_horizon
+    model_kind = ""
+    horizon = cfg.ml_horizon
 
-    for t in range(cfg.ml_train_win + h, T):
+    for t in range(cfg.ml_train_win + horizon, T):
         if model is None or (t % cfg.ml_refit_every) == 0:
-            # train on [t - train_win - h, t - h): every target fully realized by t
-            t0, t1 = t - cfg.ml_train_win - h, t - h
-            Xtr = A[t0:t1].reshape(-1, F)
-            ytr = y[t0:t1].reshape(-1)
-            ok = np.isfinite(ytr) & np.isfinite(Xtr).all(axis=1)
-            if ok.sum() < 500:
+            start = t - cfg.ml_train_win - horizon
+            stop = t - horizon
+            X_train = array[start:stop].reshape(-1, F)
+            y_train = target[start:stop].reshape(-1)
+            weights = time_decay_weights(
+                stop - start,
+                N,
+                cfg.ml_sample_half_life,
+            )
+            valid = np.isfinite(y_train) & np.isfinite(X_train).any(axis=1)
+            valid_index = np.flatnonzero(valid)
+            if len(valid_index) < 500:
                 continue
-            model = Ridge(alpha=cfg.ml_ridge_alpha)
-            model.fit(Xtr[ok], ytr[ok])
-        if model is not None:
-            preds[t] = model.predict(A[t])
+            if len(valid_index) > cfg.ml_max_rows:
+                valid_index = valid_index[-cfg.ml_max_rows:]
+            model, model_kind = fit_cross_sectional_model(
+                X_train[valid_index],
+                y_train[valid_index],
+                weights[valid_index],
+                cfg,
+            )
 
-    score = pd.DataFrame(preds, index=idx, columns=cols)
-    return cs_zscore(score).fillna(0.0)
+        if model is None:
+            continue
+        X_now = array[t]
+        live = np.isfinite(X_now).any(axis=1)
+        if not live.any():
+            continue
+        if model_kind == "ridge":
+            predictions[t, live] = model.predict(np.nan_to_num(X_now[live]))
+        else:
+            predictions[t, live] = model.predict(X_now[live])
+
+    return cs_zscore(pd.DataFrame(predictions, index=index, columns=columns))

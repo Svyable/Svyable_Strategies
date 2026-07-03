@@ -1,81 +1,103 @@
-# svyable-engine
+# Svyable Engine
 
-The generic daily alpha harness specified in [../strategy.md](../strategy.md).
-Zero Quantiacs dependencies; runs on a MacBook (full 6.5y × 128-asset pipeline ≈ 5s).
+The engine is a reusable daily alpha and portfolio harness for registered Q23-derived strategies. It computes complete candidate portfolios, compares them under a persisted PM policy, and emits one canonical portfolio for the Tastytrade workflow.
 
-## Layout
+The top-level [`README.md`](../README.md) is canonical.
 
-```
+## Core layout
+
+```text
 svyable/
-  panel.py       canonical Panel(time x asset OHLCV) + validation + cs helpers
-  config.py      SvyableConfig — strategies are configs, never code forks
-  factors.py     flat registry, ~30 factors across 4 sleeves (defensive/momentum/meanrev/micro)
-  weighting.py   rank-IC meta-learner: purged (h+1) shift, causal recency boost,
-                 correlation penalty, min-weight floor
-  sleeves.py     sleeve ensemble + drawdown stress prior
-  ml.py          optional 5th sleeve: walk-forward ridge on the factor matrix (GKX-style)
-  construct.py   seats -> softmax tilt (or HRP) -> capped-simplex projection ->
-                 smoothing -> no-trade band
-  risk.py        vol-target budget x dd throttle x overlay + kill switch + cash yield
-  metrics.py     perf summary + deflated Sharpe (Bailey/López de Prado)
-  artifacts.py   evidence chain + morning report
-  providers.py   DataProvider protocol; YFinanceProvider (parquet cache), SyntheticProvider
-  pipeline.py    orchestration
-  analysis.py    factor IC harness: per-factor IC/IR/hit-rate by horizon, quintile
-                 spread, rank stability -> markdown tearsheet (the promotion gate)
-  walkforward.py per-year OOS table + parameter fragility scan (ROBUST/FRAGILE verdict)
-  brokers.py     BrokerConnector protocol; LocalPaperBroker (offline JSON), AlpacaBroker (paper REST)
-  tastytrade.py  full tastytrade suite: OAuth2/session auth with auto-refresh, dry-run-gated
-                 submission (warnings => never submitted), limit/market orders, search/cancel/
-                 replace/poll, status snapshot; sandbox default, production double-gated
-  calendar.py    US market holidays (incl. Good Friday), staleness expectations
-  ledger.py      SQLite runs/orders/equity/events; shadow-vs-live drift; `svyable health`
-  universe.py    point-in-time NASDAQ membership via Massive /v3/reference/tickers?date=
-  rebalancer.py  weights -> integer-share orders: ADV participation caps, sells-first,
-                 lev_cap pre-trade check, order audit log, reconciliation
-  cli.py         fetch / daily / backtest / factors / walkforward / rebalance / smoke
+  panel.py                     canonical OHLCV panel and validation
+  factors.py                   Q23-derived factor registry
+  factor_library.py            maturity metadata and factor computation
+  weighting.py                 purged causal IC state and factor allocation
+  sleeves.py                   sleeve ensembles and stress priors
+  ml.py                        optional purged nonlinear ML sleeve
+  construct.py                 seats, tilt, projection, smoothing, no-trade bands
+  risk.py                      volatility budget, drawdown throttle, overlays
+  strategy_registry.py         complete named strategy recipes
+  strategy_selector.py         candidate board and cost-aware selection
+  strategy_activation.py       validated one-time canonical activation
+  strategy_daily.py            scheduled candidate evaluation runner
+  strategy_activate.py         activation CLI for agent mode
+  pipeline.py                  reusable per-strategy orchestration
+  tastytrade_sdk.py            typed Tastytrade broker adapter
+  execution_control.py         ADV-aware planning, polling, reconciliation
+  execution_quality.py         fills, fees, venues, and slippage
+  ledger.py                    SQLite operational evidence
+  streamlit_app.py             operations console
+  pages/
+    1_Strategy_Selector.py     registry, policy, candidate board, activation
+    2_Factor_Governance.py     IC and factor-governance evidence
 ```
 
 ## Setup
 
 ```bash
 cd engine
-uv venv .venv --python 3.12
-uv pip install --python .venv/bin/python numpy pandas pyarrow yfinance scikit-learn scipy
-.venv/bin/python tests/test_smoke.py          # no-network sanity
-.venv/bin/python -m svyable.cli fetch          # build the data cache
-.venv/bin/python -m svyable.cli --start 2020-01-01 backtest --trials 20
-.venv/bin/python -m svyable.cli --start 2020-01-01 daily   # today's weights + report
-
-# research & validation
-.venv/bin/python -m svyable.cli --start 2020-01-01 factors      # IC tearsheet
-.venv/bin/python -m svyable.cli --start 2020-01-01 walkforward  # yearly OOS + fragility
-
-# execution (paper). Alpaca: export ALPACA_KEY_ID / ALPACA_SECRET_KEY, --broker alpaca
-.venv/bin/python -m svyable.cli --start 2020-01-01 rebalance                 # dry run
-.venv/bin/python -m svyable.cli --start 2020-01-01 rebalance --execute      # local paper fills
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+cp .env.example .env
 ```
 
-## Validation snapshot (2026-07-01, real data, untuned defaults, biased seed universe)
+## Daily workflow
 
-- Walk-forward fragility scan: **ROBUST** — all 16 parameter perturbations positive
-  (base Sharpe 1.01, worst 0.91), profitable 6 of 7 calendar years,
-  **+32% active vs universe in 2022** (stress rotation working).
-- Top factor: `kyle_lambda_inv` IR21 = 1.19 at 0.99 rank stability; reversal family
-  negative on this trend-heavy sample (auto-de-weighted by the positive-only IC learner).
-- Full loop verified: weights -> orders -> paper fills -> reconcile (0 drifts).
+Deterministic or manual mode:
 
-Daily automation + Claude review loop: see [../ops/CLAUDE_LOOP.md](../ops/CLAUDE_LOOP.md).
+```bash
+python -m svyable.strategy_daily --start 2020-01-01
+```
 
-## Honesty ledger (read before quoting any number)
+Agent mode:
 
-- The seed universe (`universe_nasdaq_seed.txt`) is a **current** list →
-  backtests on it are survivorship-biased. Engineering validation only.
-  PIT universe = roadmap research item #1.
-- Defaults are **untuned**; the first real-data run scored deflated-Sharpe
-  "INCONCLUSIVE" — which is the tool working, not failing. Parameters change
-  only with a walk-forward report (strategy.md §8.5).
-- yfinance is the at-home feed: fine for research cadence, no SLA. A commercial
-  EOD provider is a ~40-line `DataProvider` subclass when it's time.
-- The ML sleeve is fully causal (train window ends `horizon` days before any
-  prediction) but shares the survivorship caveat above.
+```bash
+python -m svyable.strategy_daily --start 2020-01-01
+# Review outputs/strategy_selection/<tag>/candidate_board.csv
+# Write outputs/strategy_selection/agent_decision.json
+python -m svyable.strategy_activate
+```
+
+Evaluation without activation:
+
+```bash
+python -m svyable.strategy_daily --start 2020-01-01 --evaluate-only
+```
+
+The scheduled wrapper is `../ops/run_daily.sh`.
+
+## Research and validation
+
+```bash
+python -m svyable.cli --start 2020-01-01 backtest --trials 20
+python -m svyable.cli --start 2020-01-01 factors
+python -m svyable.cli --start 2020-01-01 walkforward
+python -m svyable.cli --out /tmp/svyable-smoke smoke
+```
+
+## Operations console
+
+```bash
+python -m svyable.ui
+```
+
+The selector GUI manages registered strategies and policy, can run a fresh candidate evaluation, and exposes exact strategy recipes. It never edits raw weights. The agent and GUI may select only an eligible candidate ID from the immutable board. Tastytrade consumes only `outputs/svyable_nasdaq_lo/<tag>/` after activation.
+
+## Safety
+
+- Sandbox is the default.
+- Candidate turnover uses actual Tastytrade positions when read-only broker access is available.
+- `hold_current` is always available.
+- Minimum-hold, cadence, turnover, expected-alpha, cost, risk, and kill-switch gates apply before selection.
+- Agent decisions require the exact board date and hash.
+- A board activates once; a later different decision is rejected.
+- Production bulk submission remains disabled.
+
+## Honesty ledger
+
+- Seed-universe historical backtests may be survivorship-biased.
+- Expected alpha is a causal candidate-comparison estimate, not a forecast guarantee.
+- Daily-bar flow factors are proxies, not true order-book measurements.
+- A registered strategy becomes operationally trusted only after walk-forward evidence and a sustained sandbox record.

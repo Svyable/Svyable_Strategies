@@ -1,16 +1,17 @@
-"""End-to-end pipeline: Panel -> weights + artifacts (strategy.md §7 steps 1-4)."""
+"""End-to-end pipeline: Panel -> weights + reproducible PM artifacts."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from svyable.panel import Panel
 from svyable.config import SvyableConfig
-from svyable import factors as flib
+from svyable import factor_library as flib
 from svyable.sleeves import build_ensemble, SleeveResult
 from svyable.construct import build_unit_weights, ConstructResult
 from svyable.risk import apply_risk_budget, backtest_pnl, RiskResult
@@ -21,7 +22,7 @@ from svyable.artifacts import ArtifactWriter, morning_report
 
 @dataclass
 class RunResult:
-    weights: pd.DataFrame        # final scaled target weights (time x asset)
+    weights: pd.DataFrame
     budget: pd.Series
     pnl: pd.DataFrame
     ensemble: SleeveResult
@@ -29,88 +30,179 @@ class RunResult:
     risk: RiskResult
     tag: str
     output_dir: Path | None
+    factor_names: tuple[str, ...]
 
 
-def run_pipeline(panel: Panel, cfg: SvyableConfig, *,
-                 output_root: str | Path | None = None,
-                 tag: str | None = None,
-                 write_artifacts: bool = True) -> RunResult:
+def run_pipeline(
+    panel: Panel,
+    cfg: SvyableConfig,
+    *,
+    output_root: str | Path | None = None,
+    tag: str | None = None,
+    write_artifacts: bool = True,
+    factor_names: list[str] | tuple[str, ...] | None = None,
+    precomputed_factors: dict[str, pd.DataFrame] | None = None,
+    run_context: dict[str, Any] | None = None,
+) -> RunResult:
     data_report = panel.validate()
+    selected_factors = tuple(factor_names or sorted(flib.factor_metadata().index))
 
-    # Compute the factor library once and share it across the ML sleeve and the
-    # ensemble (both consumed the identical full library — recomputing doubled
-    # the per-run cost on the default ML-enabled path).
-    F = flib.compute_all(panel, cfg)
+    if precomputed_factors is None:
+        factors = flib.compute_all(panel, cfg, names=list(selected_factors))
+    else:
+        missing = [name for name in selected_factors if name not in precomputed_factors]
+        if missing:
+            raise ValueError(
+                "Precomputed factor cache is missing: " + ", ".join(missing)
+            )
+        factors = {name: precomputed_factors[name] for name in selected_factors}
+    catalog = flib.factor_metadata(factors)
 
-    # ML sleeve (optional, plugs into the ensemble as one more sleeve)
     extra = {}
     if cfg.ml_enabled:
-        ml_score = ml_sleeve_score(F, panel, cfg)
+        ml_score = ml_sleeve_score(factors, panel, cfg)
         if ml_score is not None:
             extra["ml"] = ml_score
 
-    ens = build_ensemble(panel, cfg, extra_sleeve_scores=extra, factors=F)
-
-    liq = panel.liquidity_mask(cfg.min_adv, cfg.min_price, cfg.adv_win)
-    con = build_unit_weights(ens.score, panel.ret, liq, cfg)
-
-    rk = apply_risk_budget(con.unit_weights, panel.ret, panel.market_ret,
-                           ens.stress, cfg)
-    pnl = backtest_pnl(rk.final_weights, panel.ret, cfg)
+    ensemble = build_ensemble(
+        panel,
+        cfg,
+        extra_sleeve_scores=extra,
+        factors=factors,
+    )
+    liquidity = panel.liquidity_mask(cfg.min_adv, cfg.min_price, cfg.adv_win)
+    construction = build_unit_weights(
+        ensemble.score,
+        panel.ret,
+        liquidity,
+        cfg,
+    )
+    risk = apply_risk_budget(
+        construction.unit_weights,
+        panel.ret,
+        panel.market_ret,
+        ensemble.stress,
+        cfg,
+    )
+    pnl = backtest_pnl(risk.final_weights, panel.ret, cfg)
 
     use_tag = tag or datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = None
+    output_dir = None
 
     if write_artifacts and output_root is not None:
-        aw = ArtifactWriter(output_root, cfg.strategy_id, use_tag)
-        out_dir = aw.dir
+        writer = ArtifactWriter(output_root, cfg.strategy_id, use_tag)
+        output_dir = writer.dir
 
-        last = rk.final_weights.index[-1]
-        w_today = rk.final_weights.loc[last]
-        w_prev = rk.final_weights.iloc[-2] if len(rk.final_weights) > 1 else None
+        last = risk.final_weights.index[-1]
+        weights_today = risk.final_weights.loc[last]
+        weights_previous = (
+            risk.final_weights.iloc[-2] if len(risk.final_weights) > 1 else None
+        )
+        prices_today = panel.close.loc[last].dropna().rename("price")
+        adv_today = panel.adv(cfg.adv_win).loc[last].dropna().rename("adv_dollars")
+        liquid_today = (
+            liquidity.loc[last].fillna(False).astype(bool).rename("is_liquid")
+        )
+        execution_inputs = pd.concat(
+            [prices_today, adv_today, liquid_today], axis=1
+        ).sort_index()
 
-        aw.write_frame("weights_today", w_today[w_today > 0].rename("weight"))
-        aw.write_frame("weights_history", rk.final_weights.iloc[-63:])
-        aw.write_frame("budget", rk.budget.rename("budget"))
-        aw.write_frame("sleeve_weights", ens.sleeve_weights)
-        aw.write_frame("ic_health", ens.ic_health)
-        aw.write_frame("pnl_diag", pnl)
-        for name, fw in ens.factor_weights.items():
-            aw.write_frame(f"factor_weights_{name}", fw.iloc[-21:])
+        writer.write_frame(
+            "weights_today",
+            weights_today[weights_today > 0].rename("weight"),
+        )
+        writer.write_frame("weights_history", risk.final_weights.iloc[-63:])
+        writer.write_frame("budget", risk.budget.rename("budget"))
+        writer.write_frame("sleeve_weights", ensemble.sleeve_weights)
+        writer.write_frame("sleeve_health", ensemble.sleeve_health)
+        writer.write_frame("ic_health", ensemble.ic_health)
+        writer.write_frame("factor_catalog", catalog)
+        writer.write_frame("pnl_diag", pnl)
+        writer.write_frame("execution_inputs", execution_inputs)
+        for name, factor_weights in ensemble.factor_weights.items():
+            writer.write_frame(
+                f"factor_weights_{name}", factor_weights.iloc[-21:]
+            )
+        for name, health in ensemble.factor_health.items():
+            writer.write_frame(f"factor_health_{name}", health)
 
-        recent = perf_summary(pnl["net_ret"].iloc[-252:], benchmark=panel.market_ret.iloc[-252:])
+        recent = perf_summary(
+            pnl["net_ret"].iloc[-252:],
+            benchmark=panel.market_ret.iloc[-252:],
+        )
         report = morning_report(
-            strategy_id=cfg.strategy_id, tag=use_tag,
-            weights_today=w_today, weights_prev=w_prev,
-            budget=float(rk.budget.iloc[-1]), seats=int(con.seats.iloc[-1]),
-            sleeve_weights=ens.sleeve_weights.iloc[-1],
-            ic_health=ens.ic_health.iloc[-1],
-            stress=float(ens.stress.iloc[-1]),
-            kill_switch=bool(rk.kill_switch.iloc[-1] > 0),
-            data_report=data_report, perf_recent=recent,
+            strategy_id=cfg.strategy_id,
+            tag=use_tag,
+            weights_today=weights_today,
+            weights_prev=weights_previous,
+            budget=float(risk.budget.iloc[-1]),
+            seats=int(construction.seats.iloc[-1]),
+            sleeve_weights=ensemble.sleeve_weights.iloc[-1],
+            ic_health=ensemble.ic_health.iloc[-1],
+            stress=float(ensemble.stress.iloc[-1]),
+            kill_switch=bool(risk.kill_switch.iloc[-1] > 0),
+            data_report=data_report,
+            perf_recent=recent,
             config_hash=cfg.config_hash(),
         )
-        aw.write_report(report)
+        writer.write_report(report)
 
-        aw.write_meta({
-            "strategy_id": cfg.strategy_id,
-            "version": cfg.version,
-            "tag": use_tag,
-            "run_timestamp": datetime.now().isoformat(),
-            "config_hash": cfg.config_hash(),
-            "config": cfg.to_dict(),
-            "data": data_report,
-            "panel_meta": panel.meta,
-            "perf_1y_net": recent,
-        })
+        stages = catalog["stage"].value_counts().to_dict()
+        writer.write_meta(
+            {
+                "strategy_id": cfg.strategy_id,
+                "version": cfg.version,
+                "tag": use_tag,
+                "run_timestamp": datetime.now().isoformat(),
+                "config_hash": cfg.config_hash(),
+                "config": cfg.to_dict(),
+                "run_context": run_context or {},
+                "data": data_report,
+                "panel_meta": panel.meta,
+                "perf_1y_net": recent,
+                "factor_library": {
+                    "count": len(catalog),
+                    "names": list(selected_factors),
+                    "proven": int(stages.get("proven", 0)),
+                    "shadow": int(stages.get("shadow", 0)),
+                    "missing_values_preserved_for_ic": True,
+                    "tradable_universe_ic": True,
+                    "precomputed_cache": precomputed_factors is not None,
+                },
+                "execution_inputs": {
+                    "date": str(last.date() if hasattr(last, "date") else last),
+                    "price_count": int(execution_inputs["price"].notna().sum()),
+                    "adv_count": int(
+                        execution_inputs["adv_dollars"].notna().sum()
+                    ),
+                    "liquid_count": int(
+                        execution_inputs["is_liquid"].fillna(False).sum()
+                    ),
+                    "adv_window": cfg.adv_win,
+                    "adv_participation_cap": cfg.adv_participation_cap,
+                },
+            }
+        )
 
-    return RunResult(weights=rk.final_weights, budget=rk.budget, pnl=pnl,
-                     ensemble=ens, construct=con, risk=rk,
-                     tag=use_tag, output_dir=out_dir)
+    return RunResult(
+        weights=risk.final_weights,
+        budget=risk.budget,
+        pnl=pnl,
+        ensemble=ensemble,
+        construct=construction,
+        risk=risk,
+        tag=use_tag,
+        output_dir=output_dir,
+        factor_names=selected_factors,
+    )
 
 
-def backtest_report(result: RunResult, panel: Panel, cfg: SvyableConfig,
-                    n_trials: int = 20) -> dict:
+def backtest_report(
+    result: RunResult,
+    panel: Panel,
+    cfg: SvyableConfig,
+    n_trials: int = 20,
+) -> dict:
     net = result.pnl["net_ret"]
     return {
         "full_period": perf_summary(net, benchmark=panel.market_ret),
@@ -118,7 +210,10 @@ def backtest_report(result: RunResult, panel: Panel, cfg: SvyableConfig,
         "avg_daily_turnover": round(float(result.pnl["turnover"].mean() / 2), 4),
         "tc_drag_annual": round(float(result.pnl["tc"].mean() * 252), 4),
         "avg_gross": round(float(result.pnl["gross_exposure"].mean()), 3),
-        "no_trade_band_held_frac": round(float(result.construct.held_days.mean()), 3),
+        "no_trade_band_held_frac": round(
+            float(result.construct.held_days.mean()), 3
+        ),
         "kill_switch_days": int(result.risk.kill_switch.sum()),
         "config_hash": cfg.config_hash(),
+        "factor_count": len(result.factor_names),
     }

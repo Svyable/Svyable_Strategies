@@ -27,7 +27,7 @@ class SleeveSpec:
 @dataclass(frozen=True)
 class SvyableConfig:
     strategy_id: str = "svyable_nasdaq_lo"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
 
     # ---- universe ----
     min_price: float = 5.0
@@ -61,16 +61,22 @@ class SvyableConfig:
     kurt_win: int = 63
     vov_win: int = 21
 
-    # ---- IC meta-learner (strategy.md §2.2-2.4, §8.1-8.2) ----
-    ic_lambda: float = 0.95          # factor-level EWMA
-    sleeve_ic_lambda: float = 0.94   # sleeve-level EWMA
+    # ---- IC meta-learner ----
+    ic_lambda: float = 0.95
+    sleeve_ic_lambda: float = 0.94
     ic_clip: float = 0.25
+    ic_min_cross_section: int = 15   # eligible pairwise assets required for daily IC
+    ic_min_history: int = 21         # purged observations before factor trust is active
+    ic_vol_floor: float = 0.02       # prevents tiny estimated IC vol from exploding ICIR
+    ic_ir_clip: float = 3.0
+    ic_hit_rate_win: int = 63
+    ic_min_coverage: float = 0.50
     factor_corr_penalty: float = 0.30
     factor_min_diversification: float = 0.25
-    factor_min_weight: float = 0.012
+    factor_min_weight: float = 0.012 # proven factors only; shadow factors have no floor
     sleeve_corr_penalty: float = 0.35
     sleeve_min_weight: float = 0.10
-    recency_boost: float = 0.10      # causal rolling boost strength (§8.1 fix)
+    recency_boost: float = 0.10
     recency_win: int = 21
 
     # ---- sleeves + stress prior (§5) ----
@@ -79,20 +85,20 @@ class SvyableConfig:
         SleeveSpec("defensive", (21,), +0.80),
         SleeveSpec("meanrev", (5, 21), +0.40),
         SleeveSpec("micro", (5, 21), +0.20),
-        SleeveSpec("ml", (21,), 0.0, proven=False),   # shadow: earns weight only via IC
+        SleeveSpec("ml", (21,), 0.0, proven=False),
     )
     sleeve_horizon_for_weighting: int = 21
-    stress_dd_cap: float = 0.10      # market dd at which stress saturates to 1
+    stress_dd_cap: float = 0.10
 
     # ---- construction (§12.3) ----
     seats_base: int = 20
     seats_min: int = 15
     seats_max: int = 30
     seats_adaptive: bool = True
-    seats_disp_slope: float = 4.0    # seats shed per +1 z of score dispersion
-    max_pos: float = 0.15            # sanity ceiling — risk/ADV caps should bind first
+    seats_disp_slope: float = 4.0
+    max_pos: float = 0.15
     min_pos: float = 0.005
-    softmax_tilt_alpha: float = 0.60 # blend toward conviction softmax
+    softmax_tilt_alpha: float = 0.60
     score_smooth_win: int = 4
     weight_smooth_alpha: float = 0.40
     no_trade_band: float = 0.04      # skip rebalance if L1 diff below this
@@ -107,7 +113,7 @@ class SvyableConfig:
     # ---- risk budget (§12.4) ----
     target_vol: float = 0.18
     target_vol_stressed: float = 0.12
-    lev_cap: float = 1.5             # raise toward 2.0 only per roadmap unlock schedule
+    lev_cap: float = 1.5
     lev_min: float = 0.40
     ewma_vol_lambda: float = 0.95
     dd_win: int = 126
@@ -117,23 +123,28 @@ class SvyableConfig:
     overlay_max_vol: float = 0.22
     overlay_clip: tuple[float, float] = (0.5, 1.25)
     cash_yield_annual: float = 0.045
-    kill_dd_mult: float = 1.5        # live dd > mult x backtest MaxDD -> cut to lev_min
-    backtest_max_dd: float = 0.10    # refreshed from walk-forward reports
+    kill_dd_mult: float = 1.5
+    backtest_max_dd: float = 0.10
 
     # ---- costs ----
-    tc_bps: float = 3.0              # measured-cost placeholder; contest model was ~10
-    adv_participation_cap: float = 0.05  # execution-layer: max position vs 21d ADV
+    tc_bps: float = 3.0
+    adv_participation_cap: float = 0.05
 
     # ---- ML sleeve ----
-    ml_enabled: bool = True          # degrades gracefully if sklearn missing
-    ml_refit_every: int = 21         # trading days
+    ml_enabled: bool = True
+    ml_model: str = "hist_gbrt"       # nonlinear interactions; ridge is fallback
+    ml_refit_every: int = 21
     ml_train_win: int = 504
     ml_horizon: int = 21
     ml_ridge_alpha: float = 10.0
+    ml_max_iter: int = 125
+    ml_max_leaf_nodes: int = 15
+    ml_learning_rate: float = 0.05
+    ml_l2_regularization: float = 10.0
+    ml_sample_half_life: int = 126
+    ml_max_rows: int = 250000
 
     extra: dict = field(default_factory=dict)
-
-    # ------------------------------------------------------------------
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -141,7 +152,7 @@ class SvyableConfig:
         return d
 
     def config_hash(self) -> str:
-        """Provenance hash (§8.7): identical hash => identical resolved config."""
+        """Provenance hash: identical hash => identical resolved config."""
         blob = json.dumps(self.to_dict(), sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
