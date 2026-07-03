@@ -49,14 +49,14 @@ class FakeBroker:
 
 
 class FakeService(ExecutionBackfillMixin):
-    def __init__(self, ledger_path: Path):
+    def __init__(self, ledger_path: Path, *, is_test: bool = True):
         self.ledger_path = ledger_path
         self.broker = FakeBroker()
         self.settings = TastySettings(
             client_secret="x",
             refresh_token="y",
             account_number="TEST123",
-            is_test=True,
+            is_test=is_test,
             audit_path=ledger_path.with_suffix(".jsonl"),
             slippage_warn_bps=10.0,
             slippage_critical_bps=20.0,
@@ -87,7 +87,8 @@ def test_backfill_is_idempotent_and_escalates_slippage():
     with TemporaryDirectory() as tmp:
         path = Path(tmp) / "ledger.db"
         seed_order(path)
-        service = FakeService(path)
+        # production settings: real fills must escalate past the thresholds
+        service = FakeService(path, is_test=False)
 
         first = service.backfill_execution_quality(since_days=5)
         second = service.backfill_execution_quality(since_days=5)
@@ -111,6 +112,33 @@ def test_backfill_is_idempotent_and_escalates_slippage():
         assert escalations == 1
 
 
+def test_sandbox_synthetic_fills_do_not_escalate():
+    """Cert-environment fill prices are simulator artifacts (market orders fill
+    at $1); they are audited as info events, never as warning/critical pages."""
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "ledger.db"
+        seed_order(path)
+        service = FakeService(path, is_test=True)
+
+        result = service.backfill_execution_quality(since_days=5)
+        assert result["fills_recorded"] == 1
+
+        ledger = Ledger(path)
+        escalations = ledger.con.execute(
+            "SELECT COUNT(*) FROM events WHERE level IN ('warning','critical') "
+            "AND source='execution_quality_backfill'"
+        ).fetchone()[0]
+        infos = ledger.con.execute(
+            "SELECT COUNT(*) FROM events WHERE level='info' "
+            "AND source='execution_quality_backfill' AND message LIKE '%synthetic%'"
+        ).fetchone()[0]
+        ledger.close()
+
+        assert escalations == 0, "sandbox fills must never page"
+        assert infos == 1, "sandbox fills still leave an audit trail"
+
+
 if __name__ == "__main__":
     test_backfill_is_idempotent_and_escalates_slippage()
+    test_sandbox_synthetic_fills_do_not_escalate()
     print("EXECUTION BACKFILL TESTS PASSED")

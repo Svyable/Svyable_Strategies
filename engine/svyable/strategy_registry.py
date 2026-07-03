@@ -124,6 +124,34 @@ register(StrategySpec(
 ))
 
 register(StrategySpec(
+    strategy_id="q23_concentrated",
+    display_name="Q23 Concentrated Flagship",
+    family="concentrated conviction book",
+    description=(
+        "The contest-identity book: 7-10 NASDAQ names at roughly 10% apiece, "
+        "selected by the full Q23 behavioral/price-action ensemble. Concentration "
+        "comes from construction (seats + position ceiling), not from a different "
+        "factor set — the alpha engine is identical to the hybrid ensemble."
+    ),
+    factor_names=DEFENSIVE + MOMENTUM + MEAN_REVERSION + DAILY_FLOW,
+    config_overrides={
+        "ml_enabled": False,
+        "seats_base": 9,
+        "seats_min": 7,
+        "seats_max": 10,
+        "max_pos": 0.12,
+        "min_pos": 0.02,
+        "score_smooth_win": 5,
+        "weight_smooth_alpha": 0.30,
+        "no_trade_band": 0.06,
+        "target_vol": 0.17,
+        # a 3-name cluster is a third of the book; cap correlated clusters tighter
+        "cluster_weight_cap": 0.30,
+    },
+    minimum_hold_days=5,
+))
+
+register(StrategySpec(
     strategy_id="q23_momentum_quality",
     display_name="Q23 Momentum Quality",
     family="trend / continuation",

@@ -26,6 +26,16 @@ class ExecutionBackfillMixin(SubmissionGuardMixin):
         if worst is None:
             return
         worst = float(worst)
+        if quality.get("synthetic_fills") or self.settings.is_test:
+            # Sandbox fill prices are simulator artifacts; keep the audit trail
+            # without paging anyone or polluting slippage statistics.
+            ledger.record_event(
+                "info",
+                source,
+                f"Sandbox synthetic fills: worst signed slippage {worst:.2f} bps "
+                "(cert-environment simulator prices; excluded from escalation).",
+            )
+            return
         if worst >= self.settings.slippage_critical_bps:
             level = "critical"
         elif worst >= self.settings.slippage_warn_bps:

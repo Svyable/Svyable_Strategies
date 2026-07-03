@@ -37,6 +37,20 @@ def test_registry_contains_distinct_complete_strategies():
     )
 
 
+def test_concentrated_flagship_matches_mandate():
+    """The flagship mandate: 7-10 positions at roughly 10% apiece, long only,
+    built by the same Q23 factor ensemble — concentration via construction."""
+    spec = get_strategy("q23_concentrated")
+    cfg = spec.build_config()
+    assert cfg.seats_min == 7 and cfg.seats_max == 10
+    assert 7 <= cfg.seats_base <= 10
+    # a full 10-seat book must be able to hold ~10% names; ceiling stays sane
+    assert 0.10 <= cfg.max_pos <= 0.15
+    assert spec.enabled_by_default
+    # same alpha engine as the hybrid ensemble, not a bespoke factor set
+    assert set(spec.factor_names) == set(get_strategy("q23_hybrid_alpha").factor_names)
+
+
 def _board(candidate_utility: float) -> pd.DataFrame:
     return pd.DataFrame([
         {

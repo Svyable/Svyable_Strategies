@@ -191,6 +191,10 @@ class ExecutionControlMixin:
             )
             fills = score_fills(raw_fills, [asdict(order) for order in orders])
             quality = execution_summary(fills)
+            # Cert-environment fills are synthetic (market orders fill at $1,
+            # limits < $3 fill instantly); their slippage numbers must never be
+            # read as execution quality or feed cost calibration.
+            quality["synthetic_fills"] = bool(self.settings.is_test)
         except Exception as exc:
             quality = {
                 "fills": 0,

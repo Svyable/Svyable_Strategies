@@ -52,6 +52,7 @@ The active registry includes:
 |---|---|---:|
 | `q23_neural_alpha` | Broad Q23 behavioral/price-action ensemble with nonlinear ML sleeve | Yes |
 | `q23_hybrid_alpha` | Balanced momentum, defensive, OU/reversal, and daily-flow ensemble | Yes |
+| `q23_concentrated` | Contest-identity flagship: 7-10 names at roughly 10% apiece, full Q23 ensemble, concentration via construction | Yes |
 | `q23_momentum_quality` | Trend continuation and momentum-quality strategy | Yes |
 | `q23_ou_mean_reversion` | Faster residual reversal and OU strategy | Yes |
 | `q23_defensive_alpha` | Lower-risk, lower-volatility stressed-regime candidate | Yes |
