@@ -73,7 +73,7 @@ class SvyableConfig:
     ic_min_coverage: float = 0.50
     factor_corr_penalty: float = 0.30
     factor_min_diversification: float = 0.25
-    factor_min_weight: float = 0.012
+    factor_min_weight: float = 0.012 # proven factors only; shadow factors have no floor
     sleeve_corr_penalty: float = 0.35
     sleeve_min_weight: float = 0.10
     recency_boost: float = 0.10
