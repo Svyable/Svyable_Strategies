@@ -18,17 +18,17 @@ def _read_csv(path: Path, **kwargs) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _read_meta(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def load_metric_series(run_dir: Path) -> dict[str, float]:
-    path = run_dir / "institutional_metrics.csv"
-    frame = _read_csv(path, index_col=0)
+    frame = _read_csv(run_dir / "institutional_metrics.csv", index_col=0)
     if frame.empty:
-        meta_path = run_dir / "meta.json"
-        if not meta_path.exists():
-            return {}
-        try:
-            return dict(json.loads(meta_path.read_text()).get("perf_1y_net") or {})
-        except (OSError, json.JSONDecodeError):
-            return {}
+        return dict(_read_meta(run_dir / "meta.json").get("perf_1y_net") or {})
     column = "value" if "value" in frame.columns else frame.columns[0]
     return {
         str(index): float(value)
@@ -38,7 +38,6 @@ def load_metric_series(run_dir: Path) -> dict[str, float]:
 
 
 def enrich_candidate_board(board: pd.DataFrame) -> pd.DataFrame:
-    """Join each candidate row to its persisted institutional metrics."""
     if board.empty:
         return board.copy()
     rows: list[dict[str, Any]] = []
@@ -49,6 +48,26 @@ def enrich_candidate_board(board: pd.DataFrame) -> pd.DataFrame:
             record.update(load_metric_series(Path(output)))
         rows.append(record)
     return pd.DataFrame(rows)
+
+
+def _component_factor_catalog(meta: dict[str, Any]) -> pd.DataFrame:
+    catalogs: list[pd.DataFrame] = []
+    for strategy_id, output in (meta.get("component_output_dirs") or {}).items():
+        frame = _read_csv(Path(output) / "factor_catalog.csv", index_col=0)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        frame["component_strategy"] = str(strategy_id)
+        catalogs.append(frame)
+    if not catalogs:
+        return pd.DataFrame()
+    combined = pd.concat(catalogs)
+    combined.index.name = "factor"
+    return (
+        combined.reset_index()
+        .drop_duplicates(subset=["factor", "component_strategy"])
+        .set_index("factor")
+    )
 
 
 def candidate_artifacts(row: pd.Series | dict[str, Any]) -> dict[str, Any]:
@@ -65,17 +84,16 @@ def candidate_artifacts(row: pd.Series | dict[str, Any]) -> dict[str, Any]:
             "meta": {},
         }
     run_dir = Path(output)
-    meta = {}
-    try:
-        meta = json.loads((run_dir / "meta.json").read_text())
-    except (OSError, json.JSONDecodeError):
-        pass
+    meta = _read_meta(run_dir / "meta.json")
+    factors = _read_csv(run_dir / "factor_catalog.csv", index_col=0)
+    if factors.empty and meta.get("kind") == "chimera_blend":
+        factors = _component_factor_catalog(meta)
     return {
         "run_dir": run_dir,
         "weights": _read_csv(run_dir / "weights_today.csv", index_col=0),
         "pnl": _read_csv(run_dir / "pnl_diag.csv", index_col=0, parse_dates=True),
         "regime": _read_csv(run_dir / "regime.csv", index_col=0, parse_dates=True),
-        "factors": _read_csv(run_dir / "factor_catalog.csv", index_col=0),
+        "factors": factors,
         "components": _read_csv(
             run_dir / "component_weights_history.csv",
             index_col=0,
@@ -87,29 +105,11 @@ def candidate_artifacts(row: pd.Series | dict[str, Any]) -> dict[str, Any]:
 
 def candidate_frontier_columns(frame: pd.DataFrame) -> list[str]:
     preferred = [
-        "candidate_id",
-        "family",
-        "eligible",
-        "utility_bps",
-        "expected_alpha_bps",
-        "estimated_cost_bps",
-        "one_way_turnover",
-        "ann_return",
-        "ann_vol",
-        "sharpe",
-        "sortino",
-        "regression_alpha_ann",
-        "beta",
-        "market_correlation",
-        "info_ratio",
-        "upside_capture",
-        "downside_capture",
-        "capture_spread",
-        "max_dd",
-        "calmar",
-        "tail_ratio_95_5",
-        "positions",
-        "gross",
-        "components",
+        "candidate_id", "family", "eligible", "utility_bps",
+        "expected_alpha_bps", "estimated_cost_bps", "one_way_turnover",
+        "ann_return", "ann_vol", "sharpe", "sortino",
+        "regression_alpha_ann", "beta", "market_correlation", "info_ratio",
+        "upside_capture", "downside_capture", "capture_spread", "max_dd",
+        "calmar", "tail_ratio_95_5", "positions", "gross", "components",
     ]
     return [column for column in preferred if column in frame.columns]
