@@ -28,6 +28,8 @@ Implemented:
 - Daily evaluation of multiple complete candidate portfolios on one shared data panel.
 - Cost-aware strategy selection using expected alpha, turnover, estimated trading cost, current-position overlap, risk, cadence, and minimum-hold rules.
 - Deterministic, manual, and two-phase agent selection modes.
+- Chimera blends: convex combinations of registered strategy portfolios (preset and user-defined) evaluated as first-class board candidates with netting-aware costs.
+- Turbulence avoidance: Mahalanobis turbulence and absorption-ratio regime throttle layered into the risk budget, with regime diagnostics on every candidate run.
 - Read-only Tastytrade positions used for turnover/rebalance calculations when credentials are available; canonical prior targets are the fallback.
 - One canonical selected portfolio under `outputs/svyable_nasdaq_lo/` for all Tastytrade execution workflows.
 - Streamlit strategy-selector, factor-governance, broker, rebalance, and audit surfaces.
@@ -94,6 +96,32 @@ The selector compares:
 
 A `hold_current` candidate is always included. A strategy switch must beat holding after costs and the configured switch buffer. Choosing daily does **not** imply trading daily.
 
+### Chimera blends
+
+A chimera is a convex combination of registered strategy portfolios — hybrid strategy weights deployed as one book. Definitions live in `engine/svyable/strategy_blend.py` (presets) or in the persisted selection policy (user-defined, built in the GUI). Component weights are either fixed in the definition or derived by a deterministic rule (inverse volatility with exact 10–50% clamps); they are never authored by the GUI or the agent.
+
+Blending happens at the portfolio level on the day's candidate results. Costs are honest: the cost model re-runs on the blended weights history, so trade netting between components (a trend buy cancelling a reversal sell) is measured rather than averaged away. Every chimera writes the full candidate artifact contract, so eligibility gates, agent decisions, and activation treat it identically to a single strategy.
+
+Preset chimeras:
+
+| Blend | Composition | Method |
+|---|---|---|
+| `chimera_flagship_shield` | 70% concentrated flagship + 30% defensive alpha | fixed |
+| `chimera_trend_reversion` | 50% momentum quality + 50% OU mean reversion | fixed |
+| `chimera_all_weather` | 40% hybrid + 30% defensive + 30% low turnover | fixed |
+| `chimera_adaptive` | flagship / trend / reversal / defensive | inverse-vol risk parity |
+
+A blend is evaluated only when every component strategy is enabled; otherwise it sits out that board. An active chimera enforces its own minimum-hold lock like any strategy.
+
+### Turbulence avoidance
+
+Two causal regime signals (`engine/svyable/turbulence.py`) throttle the risk budget between the volatility overlay and the kill switch:
+
+- **Mahalanobis turbulence** (Kritzman–Li): distance of each day's cross-asset return vector from a robust normal-times model. The model drops the most turbulent 20% of estimation days before refitting, so a sustained crisis stays flagged instead of annexing the covariance.
+- **Absorption ratio**: variance share of the top principal components on a shorter window — how tightly coupled the market currently is.
+
+The composite throttle only ever removes exposure (floor at `turb_floor`, default 0.60), is percentile-normalized so it self-calibrates across regimes, and is fully causal (verified by truncation tests). Regime diagnostics are written as a per-run artifact and surfaced in the strategy-selector GUI.
+
 ### Position source
 
 The selector first attempts a read-only Tastytrade account snapshot. When available, candidate turnover is measured against actual equity positions. If broker state is unavailable, it falls back to the last canonical selected target.
@@ -125,7 +153,7 @@ Agent mode is deliberately two-phase:
 3. Deterministic activation validates the date, board hash, candidate identity, and eligibility.
 4. One canonical portfolio is emitted.
 
-The agent may choose a strategy. It may not construct weights, edit factors, mutate config, or bypass risk/execution controls.
+The agent may choose a strategy or a chimera blend from the board (the `components` column carries each blend's exact composition). It may not construct weights, edit factors, mutate config, or bypass risk/execution controls. In agent mode nothing trades until a human approves the proposal — via the GUI's "Approve & activate" button or `python -m svyable.strategy_activate`.
 
 Candidate artifacts:
 

@@ -12,8 +12,10 @@ from typing import Any
 import pandas as pd
 
 from svyable.strategy_activation import activate_latest_selection
+from svyable.strategy_blend import blend_frame, blend_spec_from_dict
 from svyable.strategy_registry import get_strategy, registry_frame
 from svyable.strategy_selector import (
+    CANONICAL_STRATEGY_ID,
     SelectionPolicy,
     agent_decision_path,
     load_policy,
@@ -54,6 +56,85 @@ class StrategySelectionService:
 
     def save_policy(self, policy: SelectionPolicy) -> Path:
         return save_policy(self.output_root, policy)
+
+    def blend_registry(self) -> pd.DataFrame:
+        return blend_frame()
+
+    def add_custom_blend(self, payload: dict[str, Any]) -> Path:
+        """Validate and persist a user-defined chimera with the policy. The
+        blend definition is data; weights are still only ever materialized by
+        the deterministic board evaluation."""
+        from dataclasses import replace
+
+        spec = blend_spec_from_dict(payload)   # raises on invalid definitions
+        policy = self.policy()
+        kept = tuple(
+            item for item in policy.custom_blends
+            if str(item.get("blend_id")) != spec.blend_id
+        )
+        updated = replace(policy, custom_blends=kept + (dict(payload),))
+        return self.save_policy(updated)
+
+    def remove_custom_blend(self, blend_id: str) -> Path:
+        from dataclasses import replace
+
+        policy = self.policy()
+        kept = tuple(
+            item for item in policy.custom_blends
+            if str(item.get("blend_id")) != blend_id
+        )
+        return self.save_policy(replace(policy, custom_blends=kept))
+
+    def latest_regime(self) -> pd.DataFrame:
+        """Newest regime diagnostics. All candidates share the market panel,
+        so any candidate's regime artifact describes the same tape."""
+        paths = list(self.output_root.glob("candidate_*/*/regime.csv")) + list(
+            self.output_root.glob(f"{CANONICAL_STRATEGY_ID}/*/regime.csv")
+        )
+        if not paths:
+            return pd.DataFrame()
+        newest = max(paths, key=lambda path: path.parent.name)
+        frame = pd.read_csv(newest, index_col=0, parse_dates=True)
+        frame.attrs["source"] = str(newest)
+        return frame
+
+    def pending_agent_decision(self) -> dict[str, Any]:
+        """The agent's morning proposal awaiting approval, if it matches the
+        latest board and has not been activated yet."""
+        board_dir = self.latest_board_dir()
+        path = agent_decision_path(self.output_root)
+        if board_dir is None or not path.exists():
+            return {}
+        if (board_dir / "activation.json").exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return {}
+        board = self.latest_board()
+        if board.empty:
+            return {}
+        first = board.iloc[0]
+        if (
+            str(payload.get("as_of")) != str(first["as_of"])
+            or str(payload.get("candidate_set_hash")) != str(first["candidate_set_hash"])
+        ):
+            return {}
+        matches = board[board["candidate_id"] == str(payload.get("candidate_id"))]
+        if matches.empty:
+            return {}
+        row = matches.iloc[0]
+        return {
+            **payload,
+            "eligible": bool(row["eligible"]),
+            "name": row.get("name"),
+            "family": row.get("family"),
+            "components": row.get("components", ""),
+            "expected_alpha_bps": row.get("expected_alpha_bps"),
+            "one_way_turnover": row.get("one_way_turnover"),
+            "estimated_cost_bps": row.get("estimated_cost_bps"),
+            "utility_bps": row.get("utility_bps"),
+        }
 
     def run_evaluation(
         self,
@@ -171,10 +252,15 @@ Read:
 - {board_dir / 'selection.json'}
 - {self.output_root / 'ledger.db'}
 
-Choose exactly one eligible `candidate_id`. Consider expected alpha, estimated
-cost, one-way turnover, current overlap, cadence, volatility, drawdown, and the
-cost-aware utility. Prefer `hold_current` when no candidate has a robust edge.
-Never edit weights or strategy code during this review.
+Choose exactly one eligible `candidate_id`. The board contains single
+registered strategies AND chimera blends (`chimera_*` rows; the `components`
+column holds the exact composition). Consider expected alpha, estimated cost,
+one-way turnover, current overlap, cadence, volatility, drawdown, the regime
+throttle, and the cost-aware utility. A chimera earns its seat through
+diversification and trade netting — pick one over a single strategy when the
+blended book beats every component after costs. Prefer `hold_current` when no
+candidate has a robust edge. Never edit weights or strategy code during this
+review; your decision is a proposal that a human approves at activation.
 
 Write JSON to:
 {agent_decision_path(self.output_root)}
@@ -199,10 +285,12 @@ strategy before writing the canonical Tastytrade weights.
         policy = self.policy()
         return {
             "registry": self.registry(),
+            "blends": self.blend_registry(),
             "policy": asdict(policy),
             "state": self.state(),
             "board": self.latest_board(),
             "decision": self.latest_decision(),
+            "pending_agent_decision": self.pending_agent_decision(),
             "policy_path": str(policy_path(self.output_root)),
             "agent_decision_path": str(agent_decision_path(self.output_root)),
         }

@@ -126,6 +126,20 @@ class SvyableConfig:
     kill_dd_mult: float = 1.5
     backtest_max_dd: float = 0.10
 
+    # ---- turbulence / regime avoidance (risk.py x turbulence.py) ----
+    turbulence_enabled: bool = True
+    turb_win: int = 504              # long "normal-times" covariance window
+    turb_step: int = 5               # model refresh cadence (days)
+    turb_shrink: float = 0.10        # diagonal covariance shrinkage
+    turb_keep_frac: float = 0.80     # quiet-majority share kept when re-estimating
+    turb_rank_win: int = 252         # percentile normalization window
+    turb_on_pct: float = 0.90        # throttle engages above this percentile
+    turb_full_pct: float = 0.99      # throttle saturates at this percentile
+    turb_floor: float = 0.60         # deepest de-risking multiplier
+    absorption_win: int = 126        # absorption tracks *current* coupling
+    absorption_top_frac: float = 0.20
+    absorption_weight: float = 0.35  # absorption share of the composite
+
     # ---- costs ----
     tc_bps: float = 3.0
     adv_participation_cap: float = 0.05

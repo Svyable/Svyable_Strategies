@@ -20,3 +20,8 @@ __pycache__/
 # engine/tests/golden_weights.json   (the behavior contract)
 # engine/requirements.lock           (reproducibility)
 # engine/universe_nasdaq_seed.txt
+
+# --- OS + build junk
+.DS_Store
+**/.DS_Store
+*.egg-info/
