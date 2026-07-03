@@ -14,15 +14,19 @@ def _read(path: Path, *, multi_index: bool = False) -> pd.DataFrame:
     return pd.read_csv(path, index_col=[0, 1] if multi_index else 0)
 
 
+def _number(value: Any, default: float = 0.0) -> float:
+    return float(value) if pd.notna(value) else default
+
+
 def _pm_state(frame: pd.DataFrame, config: dict[str, Any]) -> pd.Series:
     min_history = float(config.get("ic_min_history", 21))
     min_coverage = float(config.get("ic_min_coverage", 0.50))
     states = []
     for _, row in frame.iterrows():
-        observations = float(row.get("observations", 0.0) or 0.0)
-        coverage = float(row.get("coverage", 0.0) or 0.0)
-        ic_ir = float(row.get("ic_ir", 0.0) or 0.0)
-        weight = float(row.get("weight", 0.0) or 0.0)
+        observations = _number(row.get("observations"))
+        coverage = _number(row.get("coverage"))
+        ic_ir = _number(row.get("ic_ir"))
+        weight = _number(row.get("weight"))
         stage = str(row.get("stage", "proven"))
         if observations < min_history or coverage < min_coverage:
             state = "insufficient_evidence"
@@ -49,7 +53,7 @@ def load_factor_monitor(service) -> dict[str, Any]:
 
     catalog = _read(run_dir / "factor_catalog.csv")
     sleeves = _read(run_dir / "sleeve_health.csv")
-    config = (service.strategy_snapshot().get("meta", {}).get("config") or {})
+    config = service.strategy_snapshot().get("meta", {}).get("config") or {}
     factors: dict[str, pd.DataFrame] = {}
     for path in sorted(run_dir.glob("factor_health_*.csv")):
         name = path.stem.removeprefix("factor_health_")
