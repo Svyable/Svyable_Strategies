@@ -9,10 +9,11 @@ import pandas as pd
 from svyable.execution_quality import execution_summary, fetch_order_fills, score_fills
 from svyable.ledger import Ledger
 from svyable.rebalancer import PlannedOrder
+from svyable.submission_guard import SubmissionGuardMixin
 
 
-class ExecutionBackfillMixin:
-    """Composes with ``ExecutionControlMixin`` through normal Python MRO."""
+class ExecutionBackfillMixin(SubmissionGuardMixin):
+    """Composes guard, backfill, and execution controls through normal Python MRO."""
 
     def _record_slippage_event(
         self,
