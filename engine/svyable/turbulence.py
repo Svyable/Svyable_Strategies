@@ -1,20 +1,15 @@
-"""Cross-sectional turbulence and absorption regime model.
+"""Causal market-structure regime model.
 
-Two complementary, fully causal signals computed on the shared daily panel,
-combined into a throttle that multiplies the risk budget (strategy.md §12.4
-stack). Both react to *structure*, not just magnitude, so they de-risk before
-realized portfolio volatility can:
+The regime stack combines four complementary price-only diagnostics:
 
-1. Mahalanobis turbulence (Kritzman-Li 2010): the distance of today's
-   cross-asset return vector from its recent multivariate distribution. It
-   spikes when returns are unusually large OR when assets move "wrong"
-   relative to their historical correlation structure.
-2. Absorption ratio (Kritzman-Li-Page-Rigobon 2011): the fraction of total
-   variance explained by the top principal components. High and rising
-   absorption means a tightly coupled, fragile market where shocks propagate.
+1. robust Mahalanobis turbulence for unusual multivariate return geometry;
+2. absorption ratio for systemic coupling;
+3. market breadth for participation deterioration; and
+4. panic state for the high-volatility drawdown environment associated with
+   momentum crashes and unstable beta.
 
-The throttle only ever removes exposure (multiplier in [turb_floor, 1]); it
-never adds leverage, and the kill switch downstream still has the last word.
+The composite primarily removes exposure. A small, separately bounded risk-on
+boost is allowed only when breadth is strong and turbulence is quiet.
 """
 
 from __future__ import annotations
@@ -25,10 +20,10 @@ import pandas as pd
 from svyable.config import SvyableConfig
 from svyable.panel import EPS
 
+ANN = 252.0
+
 
 def _model_dates(index: pd.Index, window: int, step: int) -> list[int]:
-    """Positions at which the covariance model is refreshed (causal, anchored
-    at the series start so truncating the future never shifts past refreshes)."""
     return list(range(window, len(index), step))
 
 
@@ -41,70 +36,54 @@ def turbulence_index(
     min_coverage: float = 0.90,
     keep_frac: float = 0.80,
 ) -> pd.Series:
-    """Normalized Mahalanobis distance d²/N of each day's return vector.
-
-    The covariance model (mean, shrunk covariance Cholesky) is refreshed every
-    ``step`` days from the trailing ``window`` and applied to subsequent days
-    until the next refresh — day t only ever sees data through t-1. Assets
-    need ``min_coverage`` non-missing days in the window to participate.
-
-    The model must describe *normal* times: a naive rolling estimate absorbs a
-    crisis within days and the index collapses exactly when it should be
-    screaming. Crisis days are individually modest but correlated, so
-    winsorization cannot remove them; instead an MCD-style robust pass scores
-    every window day under an initial model, drops the most turbulent
-    ``1 - keep_frac``, and re-estimates from the quiet majority. Distances are
-    then computed on raw returns against that normal-times model.
-    """
+    """Robust normalized Mahalanobis distance, fit only on prior observations."""
 
     def _fit(sample: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-        mu = np.nanmean(sample, axis=0)
-        centered = np.nan_to_num(sample - mu, nan=0.0)
-        cov = centered.T @ centered / max(1, len(centered) - 1)
-        diag = np.diag(np.diag(cov))
-        shrunk = (1.0 - shrink) * cov + shrink * diag
+        mean = np.nanmean(sample, axis=0)
+        centered = np.nan_to_num(sample - mean, nan=0.0)
+        covariance = centered.T @ centered / max(1, len(centered) - 1)
+        diagonal = np.diag(np.diag(covariance))
+        shrunk = (1.0 - shrink) * covariance + shrink * diagonal
         shrunk[np.diag_indices_from(shrunk)] += EPS
         try:
-            return mu, np.linalg.cholesky(shrunk), centered
+            return mean, np.linalg.cholesky(shrunk), centered
         except np.linalg.LinAlgError:
             return None
 
     values = returns.to_numpy(dtype=np.float64)
     index = returns.index
-    out = np.full(len(index), np.nan)
-
-    chol = None
-    mu = None
-    cols: np.ndarray | None = None
+    output = np.full(len(index), np.nan)
+    cholesky = None
+    mean = None
+    columns: np.ndarray | None = None
     refreshes = set(_model_dates(index, window, step))
 
     for t in range(window, len(index)):
-        if t in refreshes or chol is None:
+        if t in refreshes or cholesky is None:
             sample = values[t - window : t]
             coverage = np.isfinite(sample).mean(axis=0)
-            cols = np.where(coverage >= min_coverage)[0]
-            if len(cols) < 5:
-                chol = None
+            columns = np.where(coverage >= min_coverage)[0]
+            if len(columns) < 5:
+                cholesky = None
                 continue
-            first = _fit(sample[:, cols])
+            first = _fit(sample[:, columns])
             if first is None:
-                chol = None
+                cholesky = None
                 continue
-            mu, chol, centered = first
-            scores = (np.linalg.solve(chol, centered.T) ** 2).sum(axis=0)
-            keep = np.sort(
-                np.argsort(scores)[: max(30, int(len(scores) * keep_frac))]
-            )
-            refit = _fit(sample[keep][:, cols])
+            mean, cholesky, centered = first
+            scores = (np.linalg.solve(cholesky, centered.T) ** 2).sum(axis=0)
+            keep_count = max(30, int(len(scores) * keep_frac))
+            keep = np.sort(np.argsort(scores)[:keep_count])
+            refit = _fit(sample[keep][:, columns])
             if refit is not None:
-                mu, chol, _ = refit
-        if chol is None or cols is None or mu is None:
+                mean, cholesky, _ = refit
+        if cholesky is None or columns is None or mean is None:
             continue
-        x = np.nan_to_num(values[t, cols] - mu, nan=0.0)
-        z = np.linalg.solve(chol, x)   # chol is lower-triangular; z'z = x' Σ⁻¹ x
-        out[t] = float(z @ z) / len(cols)
+        observation = np.nan_to_num(values[t, columns] - mean, nan=0.0)
+        standardized = np.linalg.solve(cholesky, observation)
+        output[t] = float(standardized @ standardized) / len(columns)
 
-    return pd.Series(out, index=index, name="turbulence")
+    return pd.Series(output, index=index, name="turbulence")
 
 
 def absorption_ratio(
@@ -115,81 +94,174 @@ def absorption_ratio(
     top_frac: float = 0.20,
     min_coverage: float = 0.90,
 ) -> pd.Series:
-    """Fraction of total variance absorbed by the top ``top_frac`` eigenvectors
-    of the trailing correlation matrix. Refreshed every ``step`` days; causal."""
+    """Fraction of correlation variance explained by the leading eigenvectors."""
     values = returns.to_numpy(dtype=np.float64)
     index = returns.index
-    out = np.full(len(index), np.nan)
-
+    output = np.full(len(index), np.nan)
     last = np.nan
     refreshes = set(_model_dates(index, window, step))
+
     for t in range(window, len(index)):
         if t in refreshes:
             sample = values[t - window : t]
             coverage = np.isfinite(sample).mean(axis=0)
-            cols = np.where(coverage >= min_coverage)[0]
-            if len(cols) >= 5:
-                sub = sample[:, cols]
-                mu = np.nanmean(sub, axis=0)
-                sd = np.nanstd(sub, axis=0) + EPS
-                z = np.nan_to_num((sub - mu) / sd, nan=0.0)
-                corr = z.T @ z / max(1, len(z) - 1)
-                eig = np.linalg.eigvalsh(corr)
-                k = max(1, int(round(top_frac * len(cols))))
-                last = float(eig[-k:].sum() / (eig.sum() + EPS))
-        out[t] = last
+            columns = np.where(coverage >= min_coverage)[0]
+            if len(columns) >= 5:
+                subset = sample[:, columns]
+                mean = np.nanmean(subset, axis=0)
+                standard_deviation = np.nanstd(subset, axis=0) + EPS
+                standardized = np.nan_to_num(
+                    (subset - mean) / standard_deviation, nan=0.0
+                )
+                correlation = standardized.T @ standardized / max(1, len(standardized) - 1)
+                eigenvalues = np.linalg.eigvalsh(correlation)
+                count = max(1, int(round(top_frac * len(columns))))
+                last = float(eigenvalues[-count:].sum() / (eigenvalues.sum() + EPS))
+        output[t] = last
 
-    return pd.Series(out, index=index, name="absorption")
+    return pd.Series(output, index=index, name="absorption")
+
+
+def market_breadth(
+    returns: pd.DataFrame,
+    *,
+    window: int = 126,
+    smooth: int = 10,
+) -> pd.Series:
+    """Share of assets with a positive trailing log return."""
+    log_return = np.log1p(returns.clip(lower=-0.999))
+    trailing = log_return.rolling(window, min_periods=max(42, window // 2)).sum()
+    breadth = (trailing > 0.0).where(trailing.notna()).mean(axis=1)
+    return breadth.rolling(smooth, min_periods=max(3, smooth // 2)).mean().rename("breadth")
+
+
+def panic_state(
+    returns: pd.DataFrame,
+    cfg: SvyableConfig,
+) -> pd.DataFrame:
+    """High-volatility drawdown state using the panel's equal-weight proxy."""
+    market = returns.mean(axis=1, skipna=True).fillna(0.0)
+    growth = (1.0 + market).cumprod()
+    peak = growth.rolling(cfg.dd_win, min_periods=1).max()
+    drawdown = (1.0 - growth / (peak + EPS)).clip(0.0, 1.0)
+
+    realized_vol = market.rolling(
+        cfg.panic_vol_win,
+        min_periods=max(10, cfg.panic_vol_win // 2),
+    ).std() * np.sqrt(ANN)
+    baseline_mean = realized_vol.rolling(252, min_periods=126).mean()
+    baseline_std = realized_vol.rolling(252, min_periods=126).std()
+    vol_z = (realized_vol - baseline_mean) / (baseline_std + EPS)
+
+    dd_span = max(cfg.panic_dd_full - cfg.panic_dd_on, 1e-6)
+    vol_span = max(cfg.panic_vol_z_full - cfg.panic_vol_z_on, 1e-6)
+    dd_signal = ((drawdown - cfg.panic_dd_on) / dd_span).clip(0.0, 1.0)
+    vol_signal = ((vol_z - cfg.panic_vol_z_on) / vol_span).clip(0.0, 1.0)
+    panic = np.sqrt(dd_signal * vol_signal).fillna(0.0)
+
+    return pd.DataFrame(
+        {
+            "market_drawdown": drawdown,
+            "market_realized_vol": realized_vol,
+            "market_vol_z": vol_z,
+            "panic_signal": panic,
+        }
+    )
 
 
 def regime_frame(returns: pd.DataFrame, cfg: SvyableConfig) -> pd.DataFrame:
-    """Turbulence + absorption diagnostics and the composite budget throttle.
-
-    - ``turb_pct``: rolling percentile of the turbulence index; the throttle
-      ramps in above ``turb_on_pct`` and saturates at ``turb_full_pct``.
-    - ``absorption_delta``: standardized 15d-vs-1y shift in absorption; a
-      rising ratio (0.5-2.0 sigma ramp) marks increasing fragility.
-    - ``throttle``: 1 - (1 - turb_floor) * composite, clipped to
-      [turb_floor, 1]. Missing early history resolves to 1 (no de-risking).
-    """
-    turb = turbulence_index(
+    """Return regime diagnostics, de-risking throttle, and bounded multiplier."""
+    turbulence = turbulence_index(
         returns,
         window=cfg.turb_win,
         step=cfg.turb_step,
         shrink=cfg.turb_shrink,
         keep_frac=cfg.turb_keep_frac,
     )
-    turb_pct = turb.rolling(cfg.turb_rank_win, min_periods=63).rank(pct=True)
-    span = max(cfg.turb_full_pct - cfg.turb_on_pct, 1e-6)
-    turb_signal = ((turb_pct - cfg.turb_on_pct) / span).clip(0.0, 1.0)
+    turbulence_percentile = turbulence.rolling(
+        cfg.turb_rank_win, min_periods=63
+    ).rank(pct=True)
+    turbulence_span = max(cfg.turb_full_pct - cfg.turb_on_pct, 1e-6)
+    turbulence_signal = (
+        (turbulence_percentile - cfg.turb_on_pct) / turbulence_span
+    ).clip(0.0, 1.0)
 
-    absorb = absorption_ratio(
+    absorption = absorption_ratio(
         returns,
         window=cfg.absorption_win,
         step=cfg.turb_step,
         top_frac=cfg.absorption_top_frac,
     )
-    base_mean = absorb.rolling(252, min_periods=126).mean()
-    base_std = absorb.rolling(252, min_periods=126).std()
-    absorb_delta = (absorb.rolling(15, min_periods=10).mean() - base_mean) / (
-        base_std + EPS
-    )
-    absorb_signal = ((absorb_delta - 0.5) / 1.5).clip(0.0, 1.0)
+    absorption_mean = absorption.rolling(252, min_periods=126).mean()
+    absorption_std = absorption.rolling(252, min_periods=126).std()
+    absorption_delta = (
+        absorption.rolling(15, min_periods=10).mean() - absorption_mean
+    ) / (absorption_std + EPS)
+    absorption_signal = ((absorption_delta - 0.5) / 1.5).clip(0.0, 1.0)
 
-    aw = cfg.absorption_weight
-    composite = ((1.0 - aw) * turb_signal + aw * absorb_signal).fillna(0.0)
+    breadth = market_breadth(
+        returns,
+        window=cfg.breadth_win,
+        smooth=cfg.breadth_smooth,
+    )
+    breadth_span = max(cfg.breadth_on - cfg.breadth_full, 1e-6)
+    breadth_signal = ((cfg.breadth_on - breadth) / breadth_span).clip(0.0, 1.0)
+
+    panic = panic_state(returns, cfg)
+    panic_signal = panic["panic_signal"]
+
+    absorption_weight = max(0.0, cfg.absorption_weight)
+    breadth_weight = max(0.0, cfg.breadth_weight)
+    panic_weight = max(0.0, cfg.panic_weight)
+    turbulence_weight = max(
+        0.0,
+        1.0 - absorption_weight - breadth_weight - panic_weight,
+    )
+    weight_sum = (
+        turbulence_weight + absorption_weight + breadth_weight + panic_weight
+    ) or 1.0
+    composite = (
+        turbulence_weight * turbulence_signal.fillna(0.0)
+        + absorption_weight * absorption_signal.fillna(0.0)
+        + breadth_weight * breadth_signal.fillna(0.0)
+        + panic_weight * panic_signal.fillna(0.0)
+    ) / weight_sum
     throttle = (1.0 - (1.0 - cfg.turb_floor) * composite).clip(
         cfg.turb_floor, 1.0
     )
 
-    return pd.DataFrame(
-        {
-            "turbulence": turb,
-            "turb_pct": turb_pct,
-            "turb_signal": turb_signal,
-            "absorption": absorb,
-            "absorption_delta": absorb_delta,
-            "absorption_signal": absorb_signal.fillna(0.0),
-            "throttle": throttle,
-        }
+    breadth_risk_on = (
+        (breadth - cfg.regime_boost_breadth)
+        / max(1.0 - cfg.regime_boost_breadth, 1e-6)
+    ).clip(0.0, 1.0)
+    turbulence_quiet = (
+        (cfg.regime_boost_turb_pct - turbulence_percentile)
+        / max(cfg.regime_boost_turb_pct, 1e-6)
+    ).clip(0.0, 1.0)
+    risk_on_signal = (
+        breadth_risk_on
+        * turbulence_quiet
+        * (1.0 - panic_signal.fillna(0.0))
+    ).fillna(0.0)
+    boost = 1.0 + max(0.0, cfg.regime_boost_cap - 1.0) * risk_on_signal
+    multiplier = (throttle * boost).clip(cfg.turb_floor, cfg.regime_boost_cap)
+
+    return pd.concat(
+        [
+            turbulence.rename("turbulence"),
+            turbulence_percentile.rename("turb_pct"),
+            turbulence_signal.rename("turb_signal"),
+            absorption.rename("absorption"),
+            absorption_delta.rename("absorption_delta"),
+            absorption_signal.fillna(0.0).rename("absorption_signal"),
+            breadth.rename("breadth"),
+            breadth_signal.fillna(0.0).rename("breadth_signal"),
+            panic,
+            composite.rename("regime_risk"),
+            throttle.rename("throttle"),
+            risk_on_signal.rename("risk_on_signal"),
+            boost.rename("boost"),
+            multiplier.rename("multiplier"),
+        ],
+        axis=1,
     )
