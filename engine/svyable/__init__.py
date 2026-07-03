@@ -1,13 +1,14 @@
-"""Svyable engine — daily cross-sectional alpha, vendor-agnostic.
+"""Svyable engine — daily cross-sectional alpha and portfolio selection.
 
-Pipeline: Panel -> factors -> sleeve IC weighting -> composite score
-       -> seats/tilt/projection -> vol-target budget x dd throttle
-       -> target weights + morning report.
-
-See ../strategy.md for the full specification this implements.
+Pipeline: Panel -> factors -> sleeve IC weighting -> construction -> regime-aware
+risk budget -> registered strategies/chimeras -> canonical Tastytrade target.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 from svyable.panel import Panel
 from svyable.config import SvyableConfig, nasdaq_lo_config
+
+# Register production price-action extensions at package import time so research,
+# strategy validation, and the daily pipeline share one factor catalog.
+from svyable import factor_institutional as _factor_institutional  # noqa: F401,E402
