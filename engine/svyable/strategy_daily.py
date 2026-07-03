@@ -13,6 +13,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
+
 from svyable.calendar import expected_last_close, is_trading_day
 from svyable.ledger import Ledger
 from svyable.providers import TastytradeProvider, YFinanceProvider
@@ -29,6 +31,58 @@ def _provider(args):
             universe_file=args.universe,
         )
     return YFinanceProvider(cache_dir=args.cache, universe_file=args.universe)
+
+
+def _broker_weights(panel, ledger: Ledger) -> tuple[pd.Series | None, str]:
+    """Read actual Tastytrade equity weights; never submit or modify anything."""
+    try:
+        from svyable.broker_settings import TastySettings
+        from svyable.tastytrade_sdk import TastySdkBroker
+
+        settings = TastySettings.from_env(require_credentials=False)
+        if not (
+            settings.client_secret
+            and settings.refresh_token
+            and settings.account_number
+        ):
+            return None, "canonical_target"
+        broker = TastySdkBroker(settings=settings)
+        account = broker.get_account()
+        equity = float(account.get("equity", 0.0))
+        if equity <= 0:
+            raise ValueError("Tastytrade account equity is not positive")
+        rows = broker.get_positions_frame()
+        values: dict[str, float] = {}
+        latest_close = panel.close.iloc[-1]
+        for row in rows:
+            if str(row.get("instrument_type")) != "Equity":
+                continue
+            symbol = str(row.get("symbol", "")).upper()
+            if not symbol:
+                continue
+            market_value = row.get("market_value")
+            if market_value is None:
+                quantity = float(row.get("quantity", 0.0))
+                price = float(latest_close.get(symbol, float("nan")))
+                if price == price:
+                    market_value = quantity * price
+            if market_value is not None:
+                values[symbol] = values.get(symbol, 0.0) + float(market_value)
+        weights = pd.Series(values, dtype=float) / equity
+        weights = weights[weights.abs() > 1e-10]
+        ledger.record_event(
+            "info",
+            "strategy_selector",
+            f"Using read-only Tastytrade actual positions for {len(weights)} equities.",
+        )
+        return weights, "tastytrade_actual"
+    except Exception as exc:
+        ledger.record_event(
+            "warning",
+            "strategy_selector",
+            f"Actual-position read failed; using canonical target: {exc}",
+        )
+        return None, "canonical_target"
 
 
 def run(args) -> int:
@@ -82,11 +136,14 @@ def run(args) -> int:
                 return 2
 
         policy = load_policy(args.out)
+        actual_weights, position_source = _broker_weights(panel, ledger)
         selection = run_strategy_selection(
             panel,
             args.out,
             policy=policy,
             activate=False,
+            current_weights_override=actual_weights,
+            current_position_source=position_source,
         )
 
         awaiting_agent = policy.mode == "agent" or args.evaluate_only
@@ -121,6 +178,7 @@ def run(args) -> int:
                 "selected_strategy_id": strategy_id,
                 "action": decision["action"],
                 "selection_source": decision.get("source"),
+                "current_position_source": position_source,
                 "expected_alpha_bps": decision.get("expected_alpha_bps"),
                 "one_way_turnover": decision.get("one_way_turnover"),
                 "estimated_cost_bps": decision.get("estimated_cost_bps"),
@@ -137,6 +195,7 @@ def run(args) -> int:
             "recommended_strategy_id": strategy_id,
             "action": decision["action"],
             "source": decision.get("source"),
+            "current_position_source": position_source,
             "reason": decision.get("reason"),
             "expected_alpha_bps": decision.get("expected_alpha_bps"),
             "one_way_turnover": decision.get("one_way_turnover"),
