@@ -1,15 +1,15 @@
 """Validate and activate the latest strategy-selection decision.
 
 Activation is intentionally separate from candidate evaluation so an agent can
-review the current day's immutable board before the canonical Tastytrade weights
-are emitted.
+review the current day's immutable board before canonical Tastytrade weights are
+emitted. A board can be activated only once.
 """
 
 from __future__ import annotations
 
 import json
 import shutil
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,9 +52,7 @@ def _validated_agent_row(
 ) -> tuple[pd.Series, dict[str, Any]]:
     path = agent_decision_path(output_root)
     if not path.exists():
-        raise FileNotFoundError(
-            f"Agent mode requires a decision at {path}."
-        )
+        raise FileNotFoundError(f"Agent mode requires a decision at {path}.")
     payload = json.loads(path.read_text())
     as_of = str(board.iloc[0]["as_of"])
     candidate_hash = str(board.iloc[0]["candidate_set_hash"])
@@ -71,11 +69,18 @@ def _validated_agent_row(
     return row, payload
 
 
-def _validated_planned_row(board_dir: Path, board: pd.DataFrame) -> tuple[pd.Series, dict[str, Any]]:
+def _validated_planned_row(
+    board_dir: Path,
+    board: pd.DataFrame,
+) -> tuple[pd.Series, dict[str, Any]]:
     path = board_dir / "selection.json"
     if not path.exists():
         raise FileNotFoundError("The latest board has no selection.json.")
     payload = json.loads(path.read_text())
+    if str(payload.get("as_of")) != str(board.iloc[0]["as_of"]):
+        raise RuntimeError("Planned selection date does not match the board.")
+    if str(payload.get("candidate_set_hash")) != str(board.iloc[0]["candidate_set_hash"]):
+        raise RuntimeError("Planned selection hash does not match the board.")
     matches = board[board["candidate_id"] == str(payload.get("candidate_id", ""))]
     if matches.empty:
         raise RuntimeError("Planned selection is not present on the latest board.")
@@ -115,6 +120,24 @@ def _source_directory(
     raise RuntimeError("No candidate artifact directory is available for activation.")
 
 
+def _position_snapshot(
+    root: Path,
+    board: pd.DataFrame,
+) -> tuple[pd.Series, str]:
+    path = root / "strategy_selection" / "current_positions.json"
+    if path.exists():
+        payload = json.loads(path.read_text())
+        if (
+            str(payload.get("as_of")) == str(board.iloc[0]["as_of"])
+            and str(payload.get("candidate_set_hash"))
+            == str(board.iloc[0]["candidate_set_hash"])
+        ):
+            weights = pd.Series(payload.get("weights", {}), dtype=float)
+            weights.index = weights.index.astype(str)
+            return weights, str(payload.get("source", "position_snapshot"))
+    return current_weights(root), "canonical_target"
+
+
 def activate_latest_selection(output_root: str | Path) -> dict[str, Any]:
     root = Path(output_root)
     board_dir = latest_board_dir(root)
@@ -135,6 +158,15 @@ def activate_latest_selection(output_root: str | Path) -> dict[str, Any]:
         reason = str(payload.get("reason", "Validated planned selection."))[:1000]
         confidence = payload.get("agent_confidence")
 
+    activation_path = board_dir / "activation.json"
+    if activation_path.exists():
+        existing = json.loads(activation_path.read_text())
+        if existing.get("candidate_id") == row.get("candidate_id"):
+            return existing
+        raise RuntimeError(
+            "This candidate board was already activated with a different decision."
+        )
+
     selected = row.to_dict()
     selected.update(
         {
@@ -144,26 +176,37 @@ def activate_latest_selection(output_root: str | Path) -> dict[str, Any]:
             "mode": policy.mode,
         }
     )
+    held_weights, position_source = _position_snapshot(root, board)
     source_dir = _source_directory(board, row, state)
     tag = board_dir.name
     destination = root / CANONICAL_STRATEGY_ID / tag
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
-        shutil.rmtree(destination)
+        raise RuntimeError(
+            f"Canonical destination already exists without activation record: {destination}"
+        )
     shutil.copytree(source_dir, destination)
 
-    current = current_weights(root)
     if selected["action"] == "hold":
-        held = current if selected["strategy_id"] != "cash" else pd.Series(dtype=float)
+        held = (
+            held_weights
+            if selected["strategy_id"] != "cash"
+            else pd.Series(dtype=float)
+        )
         held[held.abs() > 1e-12].rename("weight").to_csv(
             destination / "weights_today.csv"
         )
         history_path = destination / "weights_history.csv"
-        history = pd.read_csv(history_path, index_col=0) if history_path.exists() else pd.DataFrame()
+        history = (
+            pd.read_csv(history_path, index_col=0)
+            if history_path.exists()
+            else pd.DataFrame()
+        )
         held_row = held.to_frame().T
         held_row.index = [str(row["as_of"])]
         pd.concat([history.iloc[:-1], held_row]).tail(63).to_csv(history_path)
 
+    selected["current_position_source"] = position_source
     meta_path = destination / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
     meta["strategy_id"] = CANONICAL_STRATEGY_ID
@@ -182,6 +225,7 @@ def activate_latest_selection(output_root: str | Path) -> dict[str, Any]:
         f"- Strategy: **{selected['strategy_id']}**\n"
         f"- Action: **{selected['action']}**\n"
         f"- Source: {source}\n"
+        f"- Position source: {position_source}\n"
         f"- Expected alpha: {selected.get('expected_alpha_bps')} bps\n"
         f"- One-way turnover: {float(selected.get('one_way_turnover', 0.0)):.1%}\n"
         f"- Estimated cost: {selected.get('estimated_cost_bps')} bps\n"
@@ -206,6 +250,7 @@ def activate_latest_selection(output_root: str | Path) -> dict[str, Any]:
         ),
         "candidate_set_hash": selected.get("candidate_set_hash"),
         "canonical_output_dir": str(destination),
+        "current_position_source": position_source,
         "source": source,
         "reason": reason,
         "activated_at": datetime.now().isoformat(timespec="seconds"),
@@ -219,7 +264,7 @@ def activate_latest_selection(output_root: str | Path) -> dict[str, Any]:
         "canonical_output_dir": str(destination),
         "activated_at": new_state["activated_at"],
     }
-    (board_dir / "activation.json").write_text(
+    activation_path.write_text(
         json.dumps(activation, indent=2, sort_keys=True, default=str)
     )
     return activation
