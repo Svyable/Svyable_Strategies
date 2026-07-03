@@ -29,6 +29,14 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
 
     st.subheader("Strategy registry")
     st.dataframe(registry, use_container_width=True)
+    strategy_options = list(registry.index)
+    inspect_strategy = st.selectbox(
+        "Inspect registered strategy",
+        strategy_options,
+        key="inspect_registered_strategy",
+    )
+    with st.expander("Strategy recipe", expanded=False):
+        st.json(service.strategy_details(inspect_strategy))
 
     st.subheader("Selection policy")
     mode = st.radio(
@@ -41,7 +49,6 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
             "waits for a validated decision; manual selects one registered strategy."
         ),
     )
-    strategy_options = list(registry.index)
     enabled = st.multiselect(
         "Enabled strategies",
         strategy_options,
@@ -123,11 +130,45 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
         except Exception as exc:
             st.error(str(exc))
 
+    st.subheader("Candidate evaluation")
+    run_left, run_middle, run_right = st.columns(3)
+    with run_left:
+        evaluation_start = st.text_input("Evaluation start", value="2020-01-01")
+    with run_middle:
+        evaluation_provider = st.selectbox(
+            "Market-data provider",
+            ["yf", "tasty"],
+            help="Tasty requires configured credentials and available candle history.",
+        )
+    with run_right:
+        force_evaluation = st.checkbox(
+            "Allow holiday/weekend evaluation",
+            value=True,
+        )
+    if st.button("Run fresh candidate evaluation"):
+        try:
+            with st.spinner("Computing all enabled strategy candidates..."):
+                result = service.run_evaluation(
+                    start=evaluation_start,
+                    provider=evaluation_provider,
+                    force=force_evaluation,
+                )
+            st.session_state["strategy_evaluation_result"] = result
+            st.success("Candidate evaluation completed. Refreshing the page state.")
+            st.rerun()
+        except Exception as exc:
+            st.error(str(exc))
+    if st.session_state.get("strategy_evaluation_result"):
+        with st.expander("Latest evaluation process output"):
+            st.json(st.session_state["strategy_evaluation_result"])
+
+    snapshot = service.snapshot()
+    board = snapshot["board"]
     st.subheader("Latest candidate board")
     if board.empty:
         st.info(
-            "No board exists yet. Run `python -m svyable.strategy_daily --force` "
-            "or wait for the next scheduled PM run."
+            "No board exists yet. Run a fresh evaluation above or wait for the "
+            "scheduled PM job."
         )
     else:
         position_source = str(board.iloc[0].get("current_position_source", "unknown"))
