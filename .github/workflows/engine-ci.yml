@@ -52,9 +52,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # requirements.txt intentionally stays loose for local development.
-          # CI constrains the resolver with requirements.lock so the golden
-          # portfolio is testing strategy/code changes, not dependency drift.
-          python -m pip install -r requirements.txt -c requirements.lock
+          # CI constrains only the numeric/research core that can affect exact
+          # golden weights. Dashboard/broker packages still resolve normally
+          # because requirements.lock is not a complete application lock.
+          grep -E '^(numpy|pandas|pyarrow|scikit-learn|scipy|joblib|threadpoolctl|python-dateutil|pytz|typing-extensions)==' requirements.lock > /tmp/svyable-ci-constraints.txt
+          cat /tmp/svyable-ci-constraints.txt
+          python -m pip install -r requirements.txt -c /tmp/svyable-ci-constraints.txt
           python - <<'PY'
           import numpy, pandas
           try:
