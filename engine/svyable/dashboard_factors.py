@@ -83,6 +83,7 @@ def _render_sleeve_intelligence(snapshot: dict) -> None:
     ic_health = snapshot["ic_health"]
     if not ic_health.empty:
         st.subheader("Sleeve smoothed IC over time")
+        render_figure(charts.ic_health_heatmap(ic_health, title="Sleeve smoothed IC heatmap"))
         frame = ic_health.copy()
         frame.index = pd.to_datetime(frame.index, errors="coerce")
         st.line_chart(frame[~frame.index.isna()].tail(252))
@@ -107,14 +108,22 @@ def _render_factor_library(snapshot: dict) -> None:
     st.subheader("Factor library health")
     display_cols = ["sleeve", "factor"] + [c for c in _HEALTH_COLS if c in combined.columns and c != "horizon"]
     ordered = combined.sort_values("ic_ir", ascending=False) if "ic_ir" in combined.columns else combined
-    st.dataframe(ordered[display_cols], use_container_width=True, hide_index=True)
+    st.dataframe(
+        ordered[display_cols].style.background_gradient(
+            subset=[c for c in ["ic_ir", "hit_rate", "weight"] if c in ordered.columns],
+            cmap="RdYlGn",
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
 
     if "ic_ir" in combined.columns:
         ranked = combined.set_index("factor")["ic_ir"].astype(float).sort_values()
-        n = st.slider("Factors to show (by |IC-IR| extremes)", 6, min(30, len(ranked)), min(15, len(ranked)))
-        half = n // 2
-        extremes = pd.concat([ranked.head(half), ranked.tail(n - half)])
-        render_figure(charts.signed_bar_chart(extremes, title="Factor information ratio (best & worst)", xlabel="IC-IR"))
+        if len(ranked) >= 2:
+            n = st.slider("Factors to show (by |IC-IR| extremes)", 2, min(30, len(ranked)), min(15, len(ranked)))
+            half = n // 2
+            extremes = pd.concat([ranked.head(half), ranked.tail(n - half)])
+            render_figure(charts.signed_bar_chart(extremes, title="Factor information ratio (best & worst)", xlabel="IC-IR"))
 
 
 def _render_sleeve_factor_weights(snapshot: dict) -> None:
@@ -130,7 +139,37 @@ def _render_sleeve_factor_weights(snapshot: dict) -> None:
     latest = frame.iloc[-1].astype(float)
     latest = latest[latest.abs() > 1e-9].sort_values(ascending=False)
     st.caption(f"Current within-sleeve factor allocation for **{sleeve}** ({len(latest)} active factors).")
-    st.bar_chart(latest.rename("weight"))
+    render_figure(charts.signed_bar_chart(latest, title=f"{sleeve} factor weights — latest", xlabel="Weight"))
+    render_figure(charts.factor_weight_heatmap(frame, title=f"{sleeve} factor weights over time"))
+
+
+def _render_factor_time_machine(snapshot: dict) -> None:
+    st.caption(
+        "Temporal factor diagnostics: green cells mean the sleeve/factor earned more trust; "
+        "red cells show negative or fading allocation/IC. Use these charts to spot alpha decay before it hits P&L."
+    )
+    ic_health = snapshot["ic_health"]
+    if not ic_health.empty:
+        render_figure(charts.ic_health_heatmap(ic_health))
+
+    factor_weights = snapshot["factor_weights"]
+    if not factor_weights:
+        st.info("No factor-weight history yet.")
+        return
+    sleeve = st.selectbox("Temporal sleeve", sorted(factor_weights.keys()), key="factor_time_machine_sleeve")
+    frame = factor_weights.get(sleeve, pd.DataFrame())
+    if frame.empty:
+        st.caption("No factor-weight history for this sleeve.")
+        return
+
+    tail = frame.copy()
+    tail.index = pd.to_datetime(tail.index, errors="coerce")
+    tail = tail[~tail.index.isna()].tail(252)
+    if not tail.empty:
+        active = tail.abs().mean().sort_values(ascending=False).head(8).index
+        st.subheader("Top factor trust paths")
+        st.line_chart(tail[active])
+        render_figure(charts.factor_weight_heatmap(tail, title=f"{sleeve} factor trust heatmap"))
 
 
 def render_factors(service: DashboardService) -> None:
@@ -145,8 +184,8 @@ def render_factors(service: DashboardService) -> None:
         "sleeve. This is where alpha decay shows up first."
     )
 
-    sleeve_tab, library_tab, weights_tab, catalog_tab = st.tabs(
-        ["🧭 Sleeves", "🔬 Factor library", "⚖️ Sleeve weights", "📚 Catalog"]
+    sleeve_tab, library_tab, weights_tab, time_tab, catalog_tab = st.tabs(
+        ["🧭 Sleeves", "🔬 Factor library", "⚖️ Sleeve weights", "⏱️ Health over time", "📚 Catalog"]
     )
     with sleeve_tab:
         _render_sleeve_intelligence(snapshot)
@@ -154,6 +193,8 @@ def render_factors(service: DashboardService) -> None:
         _render_factor_library(snapshot)
     with weights_tab:
         _render_sleeve_factor_weights(snapshot)
+    with time_tab:
+        _render_factor_time_machine(snapshot)
     with catalog_tab:
         catalog = snapshot["factor_catalog"]
         if catalog.empty:
