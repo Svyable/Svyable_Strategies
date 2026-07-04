@@ -3,7 +3,9 @@
 This replaces the old top-level split between Broker and Rebalance with one PM
 workspace. It keeps the safety gates intact while making the execution workflow
 read left-to-right: account → positions/drift → rebalance plan → preflight/submit
-→ order tools.
+→ order tools. It deliberately relies on the existing Tastytrade adapter methods
+already exposed through DashboardService: account, positions, orders, quotes,
+preflight, submit, cancel, and reconciliation.
 """
 
 from __future__ import annotations
