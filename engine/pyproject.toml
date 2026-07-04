@@ -33,6 +33,7 @@ all = [
 svyable = "svyable.cli:main"
 svyable-strategy-daily = "svyable.strategy_daily:main"
 svyable-agent-pack = "svyable.agent_pm_harness:main"
+svyable-agent-guard = "svyable.agent_decision_guard:main"
 svyable-strategy-activate = "svyable.strategy_activate:main"
 
 [build-system]
