@@ -2,10 +2,10 @@
 
 This replaces the old top-level split between Broker and Rebalance with one PM
 workspace. It keeps the safety gates intact while making the execution workflow
-read left-to-right: account → positions/drift → rebalance plan → preflight/submit
-→ order tools. It deliberately relies on the existing Tastytrade adapter methods
-already exposed through DashboardService: account, positions, orders, quotes,
-preflight, submit, cancel, and reconciliation.
+read left-to-right: account → live market → positions/drift → rebalance plan →
+preflight/submit → order tools. It deliberately relies on the existing Tastytrade
+adapter methods already exposed through DashboardService: account, positions,
+orders, quotes, preflight, submit, cancel, and reconciliation.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from svyable.broker_settings import TastySettings
+from svyable.dashboard_live_market import render_live_market_monitor
 from svyable.dashboard_positions import render_position_analytics, render_target_vs_actual
 from svyable.dashboard_service import DashboardService
 from svyable.dashboard_ui import (
@@ -25,6 +26,7 @@ from svyable.dashboard_ui import (
     submission_confirmation,
 )
 from svyable.sandbox_check import run_sandbox_check
+from svyable.tastytrade_sdk import OrderIntent
 
 
 def _load_broker_snapshot(service: DashboardService, settings: TastySettings) -> dict | None:
@@ -33,6 +35,7 @@ def _load_broker_snapshot(service: DashboardService, settings: TastySettings) ->
     cache_key = f"portfolio_ops_broker_snapshot::{settings.environment}::{service.output_root}"
     refresh = st.button("Refresh Tastytrade snapshot", type="primary")
     if refresh or cache_key not in st.session_state:
+        st.session_state.pop("portfolio_ops_live_market_table", None)
         try:
             with st.spinner("Loading Tastytrade account state..."):
                 st.session_state[cache_key] = {
@@ -175,6 +178,84 @@ def _render_rebalance_planner(service: DashboardService, settings: TastySettings
             st.error(str(exc))
 
 
+def _manual_intent_from_form() -> OrderIntent:
+    columns = st.columns(5)
+    symbol = columns[0].text_input("Symbol", value="SPY", key="manual_ticket_symbol").upper().strip()
+    side = columns[1].selectbox("Side", ["buy", "sell"], key="manual_ticket_side")
+    quantity = int(columns[2].number_input("Quantity", min_value=1, value=1, step=1, key="manual_ticket_qty"))
+    order_type = columns[3].selectbox("Type", ["market", "limit"], key="manual_ticket_type")
+    tif = columns[4].selectbox("TIF", ["day", "gtc"], key="manual_ticket_tif")
+    limit_price = None
+    if order_type == "limit":
+        limit_price = st.number_input(
+            "Limit price",
+            min_value=0.01,
+            value=1.00,
+            step=0.01,
+            format="%.2f",
+            key="manual_ticket_limit",
+        )
+    return OrderIntent(
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        order_type=order_type,
+        tif=tif,
+        limit_price=float(limit_price) if limit_price is not None else None,
+        dry_run=True,
+    ).normalized()
+
+
+def _render_manual_order_ticket(service: DashboardService, settings: TastySettings) -> None:
+    st.subheader("Manual order ticket")
+    st.caption(
+        "Human override path for a single equity order. It uses the same normalized OrderIntent, "
+        "broker preflight, audit log, and typed confirmation gates as strategy rebalance orders."
+    )
+    try:
+        intent = _manual_intent_from_form()
+    except Exception as exc:
+        st.error(str(exc))
+        return
+
+    left, right = st.columns(2)
+    with left:
+        if st.button("Fetch ticket quote", key="manual_ticket_quote"):
+            try:
+                st.dataframe(pd.DataFrame([service.quote(intent.symbol)]), use_container_width=True, hide_index=True)
+            except Exception as exc:
+                st.error(str(exc))
+    with right:
+        if st.button("Broker preflight manual order", type="primary", key="manual_ticket_preflight"):
+            try:
+                st.session_state["manual_ticket_preflight_result"] = service.preview_manual_order(intent)
+                st.session_state["manual_ticket_intent"] = intent
+            except Exception as exc:
+                st.error(str(exc))
+
+    preflight = st.session_state.get("manual_ticket_preflight_result")
+    if not preflight:
+        return
+    st.markdown("**Manual order preflight**")
+    st.json(preflight)
+    blocked = bool(preflight.get("errors")) or str(preflight.get("status", "")).lower() in {"blocked", "rejected_preflight", "error"}
+    if blocked:
+        st.error("Manual order is blocked by preflight.")
+        return
+
+    enabled, confirmation = submission_confirmation(settings, "MANUAL")
+    if st.button("Submit manual order", disabled=not enabled, type="primary", key="manual_ticket_submit"):
+        try:
+            stored = st.session_state.get("manual_ticket_intent", intent)
+            result = service.submit_manual_order(stored, confirmation=confirmation)
+            st.success("Manual order submitted through the Tastytrade adapter.")
+            st.json(result)
+            st.session_state.pop("manual_ticket_preflight_result", None)
+            st.session_state.pop("manual_ticket_intent", None)
+        except Exception as exc:
+            st.error(str(exc))
+
+
 def _render_order_tools(service: DashboardService, settings: TastySettings, snapshot: dict) -> None:
     orders = snapshot.get("orders", pd.DataFrame())
     st.subheader("Orders today")
@@ -182,6 +263,8 @@ def _render_order_tools(service: DashboardService, settings: TastySettings, snap
         st.info("No orders returned for today.")
     else:
         st.dataframe(orders, use_container_width=True, hide_index=True)
+
+    _render_manual_order_ticket(service, settings)
 
     left, right = st.columns(2)
     with left:
@@ -204,7 +287,7 @@ def _render_order_tools(service: DashboardService, settings: TastySettings, snap
             except Exception as exc:
                 st.error(str(exc))
 
-    st.subheader("Quote lookup")
+    st.subheader("Ad-hoc quote lookup")
     symbol = st.text_input("Symbol", value="SPY", key="portfolio_ops_quote_symbol")
     if st.button("Fetch quote", key="portfolio_ops_quote_button"):
         try:
@@ -237,8 +320,8 @@ def _render_order_tools(service: DashboardService, settings: TastySettings, snap
 def render_portfolio_ops(service: DashboardService, settings: TastySettings) -> None:
     st.subheader("🏦 Tastytrade PM portfolio operations")
     st.caption(
-        "Consolidated account, positions, target drift, rebalance planning, broker preflight, "
-        "sandbox submission, orders, cancellation, quotes, and reconciliation."
+        "Consolidated account, live quote board, positions, target drift, rebalance planning, broker preflight, "
+        "sandbox submission, manual ticket, orders, cancellation, quotes, and reconciliation."
     )
     snapshot = _load_broker_snapshot(service, settings)
     if snapshot is None:
@@ -263,9 +346,11 @@ def render_portfolio_ops(service: DashboardService, settings: TastySettings) -> 
                 except Exception as exc:
                     st.error(str(exc))
 
-    positions_tab, rebalance_tab, order_tab = st.tabs(
-        ["📍 Positions & drift", "⚖️ Rebalance plan", "🧾 Orders, quote & reconcile"]
+    live_tab, positions_tab, rebalance_tab, order_tab = st.tabs(
+        ["📡 Live market", "📍 Positions & drift", "⚖️ Rebalance plan", "🧾 Orders & ticket"]
     )
+    with live_tab:
+        render_live_market_monitor(service, snapshot, key_prefix="portfolio_ops_live_market", max_symbols=50)
     with positions_tab:
         _render_positions_and_drift(service, snapshot)
     with rebalance_tab:
