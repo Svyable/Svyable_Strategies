@@ -44,6 +44,14 @@ def _quote_price(row: pd.Series) -> float | None:
     return None
 
 
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return default if pd.isna(number) else number
+
+
 def _market_table(
     service: DashboardService,
     snapshot: dict[str, Any] | None,
@@ -92,7 +100,7 @@ def _market_table(
         spread_bps = (spread / price * 10_000.0) if spread is not None and price else None
         change_pct = ((price / float(prev_close)) - 1.0) if price and prev_close else None
         qty = float(pos_qty.get(symbol, 0.0))
-        mark = price or float(pos_mark.get(symbol, 0.0) or 0.0)
+        mark = price or _safe_float(pos_mark.get(symbol, 0.0), 0.0)
         target_w = float(targets.get(symbol, 0.0))
         target_notional = target_w * equity if equity is not None else None
         current_notional = qty * mark if mark else None
