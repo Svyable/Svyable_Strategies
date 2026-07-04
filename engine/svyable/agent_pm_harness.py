@@ -2,9 +2,10 @@
 
 The harness keeps the daily research/execution loop separate from repository
 self-improvement. It packages the latest immutable candidate board, decision
-rails, artifact health, and factor warnings for an agent or human PM. The only
-valid agent output remains ``strategy_selection/agent_decision.json``; this module
-never emits orders and never modifies strategy code.
+rails, artifact health, factor warnings, and a visible meta decision trace for an
+agent or human PM. The only valid agent output remains
+``strategy_selection/agent_decision.json``; this module never emits orders and
+never modifies strategy code.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any
 
 import pandas as pd
 
+from svyable.agent_meta_trace import build_meta_trace
 from svyable.calendar import expected_last_close
 from svyable.factor_health_tools import factor_review_summary, factor_trend_alerts
 from svyable.strategy_selector import load_policy
@@ -191,6 +193,11 @@ def _pick_focus_candidate(board: pd.DataFrame, selection: dict[str, Any]) -> pd.
     return board.iloc[0] if not board.empty else None
 
 
+def _focus_candidate_id(board: pd.DataFrame, selection: dict[str, Any]) -> str | None:
+    focus = _pick_focus_candidate(board, selection)
+    return str(focus.get("candidate_id")) if focus is not None else None
+
+
 def build_agent_context(
     output_root: str | Path,
     *,
@@ -209,6 +216,12 @@ def build_agent_context(
     rails = _decision_rails(board)
     focus = _pick_focus_candidate(board, selection)
     focus_health = _artifact_health(focus.get("output_dir") if focus is not None else None)
+    trace = build_meta_trace(
+        board,
+        selected_candidate_id=_focus_candidate_id(board, selection),
+        artifact_health=focus_health,
+        max_candidates=max(8, min(max_candidates, 15)),
+    )
     current_positions = _read_json(root / "strategy_selection" / "current_positions.json")
 
     top_eligible = board[
@@ -231,14 +244,17 @@ def build_agent_context(
             "top_eligible_candidate": str(top_eligible.iloc[0]["candidate_id"]) if not top_eligible.empty else None,
             "planned_candidate": selection.get("candidate_id"),
             "mode": policy.mode,
+            "visible_regime_state": trace.get("visible_regime", {}).get("state"),
         },
         "focus_candidate_artifact_health": focus_health,
+        "meta_decision_trace": trace,
         "candidates": _candidate_table(board, max_candidates),
         "agent_contract": {
-            "repo_to_agent": "Immutable board, current state, artifact health, and allowed candidate IDs.",
+            "repo_to_agent": "Immutable board, current state, artifact health, visible score tree, and allowed candidate IDs.",
             "agent_to_repo": "A hash-matched agent_decision.json selecting one allowed candidate with confidence and reason.",
             "repo_to_order_plan": "Only activated canonical weights feed rebalance planning, preflight, and any sandbox submission.",
             "self_improvement_rule": "Code changes belong in separate PR/dev cycles and must not alter the same morning decision run.",
+            "visibility_rule": "The trace is an auditable rationale tree, not private chain-of-thought.",
         },
     }
     return context
@@ -256,9 +272,27 @@ def _candidate_markdown(candidates: list[dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+def _node_markdown(nodes: list[dict[str, Any]]) -> str:
+    if not nodes:
+        return "No decision nodes available."
+    rows = ["| node | state | value | detail |", "| --- | --- | --- | --- |"]
+    for item in nodes:
+        rows.append(
+            "| "
+            + " | ".join(
+                str(item.get(key, "")) for key in ["node", "state", "value", "detail"]
+            )
+            + " |"
+        )
+    return "\n".join(rows)
+
+
 def render_agent_memo(context: dict[str, Any]) -> str:
     rails = context["rails"]
     health = context.get("focus_candidate_artifact_health", {})
+    trace = context.get("meta_decision_trace", {})
+    regime = trace.get("visible_regime", {}) or {}
+    score = trace.get("selected_score_breakdown", {}) or {}
     summary = health.get("factor_trend_summary", {}) or {}
     lines = [
         "# Svyable Agent PM Context Pack",
@@ -267,6 +301,7 @@ def render_agent_memo(context: dict[str, Any]) -> str:
         f"- Board date: `{context['as_of']}`",
         f"- Candidate hash: `{context['candidate_set_hash']}`",
         f"- Mode: `{context['summary']['mode']}`",
+        f"- Visible regime proxy: `{regime.get('state')}` with probabilities `{regime.get('probabilities')}`",
         f"- Eligible candidates: **{context['summary']['eligible_count']} / {context['summary']['candidate_count']}**",
         f"- Planned candidate: `{context['summary'].get('planned_candidate')}`",
         f"- Top eligible candidate: `{context['summary'].get('top_eligible_candidate')}`",
@@ -275,6 +310,22 @@ def render_agent_memo(context: dict[str, Any]) -> str:
     ]
     lines.extend(f"- {rule}" for rule in rails["hard_rules"])
     lines.extend([
+        "",
+        "## Visible decision tree for focus candidate",
+        f"- Selected/focus candidate: `{trace.get('selected_candidate_id')}`",
+        f"- Score formula: `{score.get('formula')}`",
+        f"- Expected alpha: `{score.get('expected_alpha_bps')}` bps",
+        f"- Estimated cost: `{score.get('estimated_cost_bps')}` bps",
+        f"- Turnover penalty: `{score.get('turnover_penalty_bps')}` bps",
+        f"- Risk penalty: `{score.get('risk_penalty_bps')}` bps",
+        f"- Utility: `{score.get('utility_bps')}` bps",
+        "",
+        _node_markdown(trace.get("selected_decision_nodes", [])),
+        "",
+        "## Weight provenance",
+        f"- Status: `{(trace.get('weight_provenance') or {}).get('status')}`",
+        f"- Provenance: {(trace.get('weight_provenance') or {}).get('provenance', 'n/a')}",
+        f"- Gross/net/effective N: `{(trace.get('weight_provenance') or {}).get('gross')}` / `{(trace.get('weight_provenance') or {}).get('net')}` / `{(trace.get('weight_provenance') or {}).get('effective_n')}`",
         "",
         "## Allowed candidate IDs",
         ", ".join(f"`{cid}`" for cid in rails["allowed_candidate_ids"]) or "None",
@@ -285,6 +336,11 @@ def render_agent_memo(context: dict[str, Any]) -> str:
         f"- Inputs stale: `{health.get('inputs_stale')}`",
         f"- Missing execution columns: `{health.get('missing_execution_columns')}`",
         f"- Factor review: `{summary.get('headline')}`; deteriorating={summary.get('deteriorating')}, watch={summary.get('watch')}, improving={summary.get('improving')}",
+        "",
+        "## Regime proxy drivers",
+    ])
+    lines.extend(f"- {driver}" for driver in regime.get("drivers", []))
+    lines.extend([
         "",
         "## Top candidates",
         _candidate_markdown(context["candidates"]),
@@ -307,7 +363,7 @@ def _decision_template(context: dict[str, Any]) -> dict[str, Any]:
         "candidate_set_hash": context["candidate_set_hash"],
         "candidate_id": default,
         "confidence": 0.0,
-        "reason": "Choose only an allowed candidate_id after reviewing the context pack.",
+        "reason": "Choose only an allowed candidate_id after reviewing the context pack and visible decision tree.",
     }
 
 
