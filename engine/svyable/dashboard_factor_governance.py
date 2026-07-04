@@ -14,7 +14,9 @@ def _strategy_factor_usage() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return factor-by-strategy usage and per-strategy coverage tables."""
     rows = []
     strategy_rows = []
-    for spec in list_strategies(include_experimental=True):
+    specs = list_strategies(include_experimental=True)
+    for spec in specs:
+        factor_names = tuple(spec.factor_names)
         strategy_rows.append(
             {
                 "strategy_id": spec.strategy_id,
@@ -22,10 +24,11 @@ def _strategy_factor_usage() -> tuple[pd.DataFrame, pd.DataFrame]:
                 "maturity": spec.maturity,
                 "enabled_by_default": spec.enabled_by_default,
                 "family": spec.family,
-                "factors": len(spec.factor_names),
+                "factors": len(factor_names),
+                "factor_names": factor_names,
             }
         )
-        for factor in spec.factor_names:
+        for factor in factor_names:
             rows.append(
                 {
                     "factor": factor,
@@ -102,13 +105,14 @@ def render_factor_governance(service: DashboardService) -> None:
                 stage = catalog["stage"].to_dict()
                 coverage = strategy_usage.copy()
                 coverage["proven_factors"] = [
-                    sum(1 for factor in list_strategies(include_experimental=True)[i].factor_names if stage.get(factor) == "proven")
-                    for i in range(len(strategy_usage))
+                    sum(1 for factor in factors_used if stage.get(factor) == "proven")
+                    for factors_used in coverage["factor_names"]
                 ]
                 coverage["shadow_factors"] = coverage["factors"] - coverage["proven_factors"]
+                coverage = coverage.drop(columns=["factor_names"])
                 st.dataframe(coverage, use_container_width=True)
             else:
-                st.dataframe(strategy_usage, use_container_width=True)
+                st.dataframe(strategy_usage.drop(columns=["factor_names"], errors="ignore"), use_container_width=True)
 
     if not sleeves.empty:
         st.subheader("Sleeve reliability")
