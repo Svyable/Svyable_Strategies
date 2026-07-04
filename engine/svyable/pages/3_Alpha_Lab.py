@@ -29,11 +29,15 @@ st.caption(
 settings = TastySettings.from_env(require_credentials=False)
 output_root = configured_output_root(settings)
 service = StrategySelectionService(output_root)
+status = service.frontier_status()
 board = enrich_candidate_board(service.latest_board())
 regime = service.latest_regime()
 
 if board.empty:
     st.info("Run a fresh candidate evaluation from the Strategy Selector first.")
+    if st.button("Enable full default frontier", key="alpha_lab_enable_full_frontier_empty"):
+        path = service.save_full_frontier_policy()
+        st.success(f"Enabled every default strategy and chimera in `{path}`. Run a fresh evaluation next.")
     st.stop()
 
 eligible = board[board.get("eligible", False) == True]  # noqa: E712
@@ -45,7 +49,7 @@ best = (
 latest_regime = regime.ffill().iloc[-1] if not regime.empty else pd.Series(dtype=float)
 
 summary = st.columns(6)
-summary[0].metric("Candidates", len(board))
+summary[0].metric("Candidates", len(board), help="Rows in the latest candidate board, including hold_current.")
 summary[1].metric("Eligible", len(eligible))
 summary[2].metric("Best utility", f"{float(best.get('utility_bps', 0.0)):.2f} bps")
 summary[3].metric("Best candidate", str(best.get("candidate_id", "—")))
@@ -59,6 +63,34 @@ summary[5].metric(
     if pd.notna(latest_regime.get("breadth"))
     else "warming up",
 )
+
+coverage = st.columns(4)
+coverage[0].metric("Registered strategies", status["registry_strategy_count"])
+coverage[1].metric("Default strategies", status["default_strategy_count"])
+coverage[2].metric("Policy strategies", status["policy_strategy_count"])
+coverage[3].metric(
+    "Board coverage",
+    f"{status['board_candidate_count']}/{status['expected_candidate_count']}",
+    help="Latest board candidates versus the candidates implied by the current policy.",
+)
+if status["is_incomplete_latest_board"]:
+    st.warning(status["explanation"])
+    with st.expander("Frontier repair actions"):
+        st.caption(
+            "The Alpha Lab can only display the most recent candidate-board artifact. "
+            "If the registry grew after the policy was saved, enable the full default "
+            "frontier and run a fresh evaluation from Strategy Registry & PM Selector."
+        )
+        st.json({
+            "missing_enabled_strategy_ids": status["missing_enabled_strategy_ids"],
+            "missing_enabled_blend_ids": status["missing_enabled_blend_ids"],
+            "latest_board_dir": status["board_dir"],
+        })
+        if st.button("Enable full default frontier", key="alpha_lab_enable_full_frontier"):
+            path = service.save_full_frontier_policy()
+            st.success(f"Saved full-frontier policy to `{path}`. Run a fresh candidate evaluation next.")
+else:
+    st.caption(status["explanation"])
 
 st.subheader("Candidate frontier")
 frontier_columns = candidate_frontier_columns(board)

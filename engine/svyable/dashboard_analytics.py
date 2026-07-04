@@ -40,14 +40,17 @@ def _period_return(returns: pd.Series, start: pd.Timestamp) -> float:
 
 
 def _render_weights_section(weights_history: pd.DataFrame) -> None:
-    """Concentration and turnover deep-dive, ported from Q23 `_weights` ideas."""
+    """Concentration, turnover, and long/short exposure deep-dive."""
     frame = numeric_timeseries(weights_history)
     if frame.empty:
         st.info("No weights history yet. Run `svyable daily` to populate `weights_history.csv`.")
         return
 
-    latest = frame.iloc[-1]
+    latest = frame.iloc[-1].astype(float)
     gross = float(latest.abs().sum())
+    long_gross = float(latest.clip(lower=0.0).sum())
+    short_gross = float(latest.clip(upper=0.0).abs().sum())
+    net = float(latest.sum())
     herfindahl = float((latest**2).sum())
     sorted_abs = latest.abs().sort_values(ascending=False)
     top5 = float(sorted_abs.head(5).sum() / (gross + 1e-12)) if gross else 0.0
@@ -56,32 +59,62 @@ def _render_weights_section(weights_history: pd.DataFrame) -> None:
     if len(turnover):
         turnover.iloc[0] = 0.0
 
-    cols = st.columns(5)
-    cols[0].metric("Positions", int((latest.abs() > 1e-9).sum()))
-    cols[1].metric("Gross exposure", percent(gross))
-    cols[2].metric("Top-5 concentration", percent(top5), help="Share of gross book in the 5 largest names.")
-    cols[3].metric("Top-10 concentration", percent(top10))
-    cols[4].metric(
+    cols = st.columns(6)
+    cols[0].metric("Long gross", percent(long_gross), help="Total positive target weight.")
+    cols[1].metric("Short gross", percent(short_gross), help="Absolute value of negative target weight.")
+    cols[2].metric("Net exposure", percent(net), help="Long minus short exposure.")
+    cols[3].metric("Gross exposure", percent(gross), help="Long plus absolute short exposure.")
+    cols[4].metric("Long / short names", f"{int((latest > 0).sum())} / {int((latest < 0).sum())}")
+    cols[5].metric(
         "Effective N",
         f"{1.0 / herfindahl:.1f}" if herfindahl > 0 else "—",
         help="1 / Herfindahl index — the diversification-equivalent number of equal positions.",
     )
 
-    st.subheader("Top target positions")
-    top_positions = latest[sorted_abs.head(20).index].rename("weight")
-    top_positions.index.name = "symbol"
-    display = pd.DataFrame(
-        {"weight": top_positions, "weight_pct": top_positions.map(percent)}
+    conc = st.columns(3)
+    conc[0].metric("Top-5 concentration", percent(top5), help="Share of gross book in the 5 largest absolute weights.")
+    conc[1].metric("Top-10 concentration", percent(top10))
+    conc[2].metric(
+        "Avg one-way turnover",
+        percent(float(turnover.mean() / 2.0)) if len(turnover) else "—",
+        help="Average half-turnover from weights_history changes.",
     )
-    st.dataframe(display, use_container_width=True)
-    st.bar_chart(top_positions)
+
+    st.subheader("Long / short exposure tape")
+    render_figure(charts.long_short_exposure_chart(frame))
+
+    st.subheader("Current long / short targets")
+    longs = latest[latest > 0].sort_values(ascending=False).head(15)
+    shorts = latest[latest < 0].sort_values(ascending=True).head(15)
+    extremes = pd.concat([shorts, longs])
+    if not extremes.empty:
+        render_figure(
+            charts.signed_bar_chart(
+                extremes,
+                title="Top long and short target weights",
+                xlabel="Portfolio weight",
+            )
+        )
+
+    top_positions = latest[sorted_abs.head(30).index].rename("weight")
+    display = pd.DataFrame({
+        "side": top_positions.map(lambda value: "LONG" if value > 0 else "SHORT" if value < 0 else "FLAT"),
+        "weight": top_positions,
+        "abs_weight": top_positions.abs(),
+    })
+    st.dataframe(
+        display.style.format({"weight": "{:.2%}", "abs_weight": "{:.2%}"}).background_gradient(
+            subset=["weight"], cmap="RdYlGn"
+        ),
+        use_container_width=True,
+    )
 
     st.subheader("Daily turnover")
     st.caption(
-        f"Average one-way turnover: **{percent(float(turnover.mean()))}**  ·  "
-        f"most recent: **{percent(float(turnover.iloc[-1]))}**"
+        f"Average one-way turnover: **{percent(float(turnover.mean() / 2.0))}**  ·  "
+        f"most recent: **{percent(float(turnover.iloc[-1] / 2.0))}**"
     )
-    st.line_chart(turnover.rename("turnover"))
+    st.line_chart((turnover / 2.0).rename("one_way_turnover"))
 
 
 def render_analytics(service: DashboardService) -> None:
@@ -125,7 +158,7 @@ def render_analytics(service: DashboardService) -> None:
     second[5].metric("Worst day", percent(summary.get("worst_day")))
 
     perf_tab, risk_tab, calendar_tab, weights_tab, stack_tab, factor_tab = st.tabs(
-        ["📈 Performance", "🛡️ Risk", "🗓️ Calendar", "⚖️ Weights", "🧱 Stack", "🔬 Distribution & IC"]
+        ["📈 Performance", "🛡️ Risk", "🗓️ Temporal heatmaps", "🟢🔴 Long / short", "🧱 Stack", "🔬 Distribution & IC"]
     )
 
     with perf_tab:
@@ -144,7 +177,7 @@ def render_analytics(service: DashboardService) -> None:
             max_value=max(max_window, 21),
             value=max(default_window, 20),
             step=5,
-            help="Lookback used for rolling Sharpe and annualized volatility.",
+            help="Lookback used for rolling Sharpe, annualized volatility, and hit rate.",
         )
         rolling = _rolling_frame(returns, window)
         if not rolling.empty:
@@ -154,6 +187,7 @@ def render_analytics(service: DashboardService) -> None:
                     rolling, ["rolling_vol"], title=f"Rolling Volatility ({window}d, annualized)"
                 )
             )
+            render_figure(charts.rolling_hit_rate_chart(returns, window=window, title=f"Rolling hit rate ({window}d)"))
 
         dsr = deflated_sharpe(returns)
         if "error" not in dsr:
@@ -165,6 +199,7 @@ def render_analytics(service: DashboardService) -> None:
 
     with calendar_tab:
         render_figure(charts.monthly_returns_heatmap(returns))
+        render_figure(charts.weekday_month_heatmap(returns))
         render_figure(charts.calendar_heatmap(returns))
 
     with weights_tab:
@@ -177,9 +212,19 @@ def render_analytics(service: DashboardService) -> None:
         render_figure(charts.return_distribution_chart(returns))
         ic = snapshot["ic_health"]
         if not ic.empty:
-            st.subheader("Factor IC health (latest)")
+            st.subheader("Factor / sleeve IC health over time")
+            render_figure(charts.ic_health_heatmap(ic))
             latest = ic.iloc[-1].sort_values(ascending=False).rename("smoothed_ic")
-            st.bar_chart(latest)
+            strongest = latest.tail(min(8, len(latest)))
+            weakest = latest.head(min(8, len(latest)))
+            extremes = pd.concat([weakest, strongest]).drop_duplicates()
+            render_figure(
+                charts.signed_bar_chart(
+                    extremes,
+                    title="Latest smoothed IC — red / green extremes",
+                    xlabel="Smoothed IC",
+                )
+            )
         tail = summary.get("tail_ratio_95_5")
         if tail is not None:
             st.caption(

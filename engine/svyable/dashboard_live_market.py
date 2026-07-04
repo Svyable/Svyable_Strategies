@@ -1,0 +1,288 @@
+"""Live Tastytrade quote-board helpers for humans and agents.
+
+Q23 was mostly offline research. Svyable now has broker connectivity, so the GUI
+should continuously answer the practical PM questions: what are my live marks,
+what names are missing quotes, where are spreads wide, and which target/actual
+names would be expensive to trade right now. The table is also structured so a PM
+agent can consume the same target/actual/quote context a human sees.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+import pandas as pd
+import streamlit as st
+
+from svyable.dashboard_service import DashboardService
+from svyable.dashboard_ui import money
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return default if pd.isna(number) else number
+
+
+def _safe_optional_float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(number):
+        return None
+    return number
+
+
+def _numeric_column(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    if column in frame.columns:
+        raw = frame[column]
+    else:
+        raw = pd.Series(default, index=frame.index)
+    return pd.to_numeric(raw, errors="coerce").fillna(default)
+
+
+def _positions_series(positions: pd.DataFrame) -> pd.Series:
+    if positions is None or positions.empty or "symbol" not in positions.columns:
+        return pd.Series(dtype=float)
+    frame = positions.copy()
+    frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    qty = _numeric_column(frame, "quantity", 0.0)
+    return qty.groupby(frame["symbol"]).sum()
+
+
+def _position_mark_series(positions: pd.DataFrame) -> pd.Series:
+    if positions is None or positions.empty or "symbol" not in positions.columns:
+        return pd.Series(dtype=float)
+    frame = positions.copy()
+    frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    mark = _numeric_column(frame, "mark", 0.0)
+    return mark.groupby(frame["symbol"]).last()
+
+
+def _quote_price(row: pd.Series) -> float | None:
+    for key in ("mark", "mid", "last", "close", "prev_close"):
+        number = _safe_optional_float(row.get(key))
+        if number is not None and number > 0:
+            return number
+    return None
+
+
+def _side_hint(delta_notional: float | None, threshold: float = 50.0) -> str:
+    if delta_notional is None or abs(delta_notional) < threshold:
+        return "HOLD"
+    return "BUY" if delta_notional > 0 else "SELL"
+
+
+def _agent_note(*, quote_ok: bool, spread_bps: float | None, delta_notional: float | None) -> str:
+    side = _side_hint(delta_notional)
+    if not quote_ok:
+        return "BLOCK: missing live quote"
+    if spread_bps is not None and spread_bps > 50.0:
+        return f"CAUTION: {side}, very wide spread"
+    if spread_bps is not None and spread_bps > 25.0:
+        return f"WATCH: {side}, wide spread"
+    if side == "HOLD":
+        return "OK: near target"
+    return f"OK: {side} candidate"
+
+
+def _market_table(
+    service: DashboardService,
+    snapshot: dict[str, Any] | None,
+    *,
+    max_symbols: int,
+) -> pd.DataFrame:
+    try:
+        targets = service.target_series().astype(float)
+        targets.index = targets.index.astype(str).str.upper()
+    except Exception:
+        targets = pd.Series(dtype=float)
+
+    positions = pd.DataFrame() if snapshot is None else snapshot.get("positions", pd.DataFrame())
+    pos_qty = _positions_series(positions)
+    pos_mark = _position_mark_series(positions)
+    equity = None
+    if snapshot is not None:
+        account = snapshot.get("account", {})
+        equity = _safe_optional_float(account.get("equity"))
+
+    target_rank = targets.abs().sort_values(ascending=False)
+    symbols = list(target_rank.head(max_symbols).index)
+    for symbol in pos_qty.abs().sort_values(ascending=False).index:
+        if symbol not in symbols:
+            symbols.append(symbol)
+        if len(symbols) >= max_symbols:
+            break
+    symbols = sorted({str(symbol).upper() for symbol in symbols if str(symbol).strip()})
+    if not symbols:
+        return pd.DataFrame()
+
+    quotes = service.broker.get_market_snapshot(symbols)
+    rows: list[dict[str, Any]] = []
+    for symbol in symbols:
+        quote = quotes.get(symbol, {})
+        row = {"symbol": symbol, **quote}
+        row_series = pd.Series(row)
+        price = _quote_price(row_series)
+        bid = _safe_optional_float(row.get("bid"))
+        ask = _safe_optional_float(row.get("ask"))
+        prev_close = _safe_optional_float(row.get("prev_close")) or _safe_optional_float(row.get("close"))
+        spread = ask - bid if bid is not None and ask is not None else None
+        spread_bps = (spread / price * 10_000.0) if spread is not None and price else None
+        change_pct = ((price / prev_close) - 1.0) if price and prev_close else None
+        qty = float(pos_qty.get(symbol, 0.0))
+        mark = price or _safe_float(pos_mark.get(symbol, 0.0), 0.0)
+        target_w = float(targets.get(symbol, 0.0))
+        target_notional = target_w * equity if equity is not None else None
+        current_notional = qty * mark if mark else None
+        delta_notional = (
+            target_notional - current_notional
+            if target_notional is not None and current_notional is not None
+            else None
+        )
+        quote_ok = bool(price)
+        abs_delta = abs(delta_notional) if delta_notional is not None else None
+        rows.append(
+            {
+                "symbol": symbol,
+                "target_w": target_w,
+                "abs_target_w": abs(target_w),
+                "broker_qty": qty,
+                "price": price,
+                "bid": bid,
+                "ask": ask,
+                "spread_bps": spread_bps,
+                "change_pct": change_pct,
+                "volume": row.get("volume"),
+                "target_notional": target_notional,
+                "current_notional": current_notional,
+                "delta_notional": delta_notional,
+                "abs_delta_notional": abs_delta,
+                "trade_side_hint": _side_hint(delta_notional),
+                "quote_flag": "OK" if quote_ok else "MISSING",
+                "spread_flag": "WIDE" if spread_bps is not None and spread_bps > 25.0 else "OK",
+                "agent_note": _agent_note(quote_ok=quote_ok, spread_bps=spread_bps, delta_notional=delta_notional),
+                "updated_at": row.get("updated_at"),
+                "quote_ok": quote_ok,
+            }
+        )
+
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    frame = frame.sort_values(
+        ["quote_ok", "abs_delta_notional", "abs_target_w"],
+        ascending=[False, False, False],
+        na_position="last",
+    )
+    return frame
+
+
+def _format_live_table(frame: pd.DataFrame):
+    formatters = {
+        "target_w": "{:.2%}",
+        "price": "${:,.2f}",
+        "bid": "${:,.2f}",
+        "ask": "${:,.2f}",
+        "spread_bps": "{:.1f}",
+        "change_pct": "{:.2%}",
+        "target_notional": "${:,.0f}",
+        "current_notional": "${:,.0f}",
+        "delta_notional": "${:,.0f}",
+        "volume": "{:,.0f}",
+    }
+    usable = {key: value for key, value in formatters.items() if key in frame.columns}
+    return frame.style.format(usable, na_rep="—").background_gradient(
+        subset=[col for col in ["change_pct", "delta_notional"] if col in frame.columns],
+        cmap="RdYlGn",
+    ).background_gradient(
+        subset=[col for col in ["spread_bps"] if col in frame.columns],
+        cmap="Reds",
+    )
+
+
+def render_live_market_monitor(
+    service: DashboardService,
+    snapshot: dict[str, Any] | None = None,
+    *,
+    key_prefix: str = "live_market",
+    max_symbols: int = 40,
+    compact: bool = False,
+) -> pd.DataFrame:
+    """Render a live quote board for the union of target and broker symbols."""
+    st.caption(
+        "Live quote board from Tastytrade for the active target/position universe. "
+        "This is the human + agent market sanity check before preflight or rebalancing."
+    )
+    controls = st.columns([1, 1, 4])
+    if controls[0].button("Refresh live quotes", key=f"{key_prefix}_refresh", type="primary"):
+        st.session_state.pop(f"{key_prefix}_table", None)
+    max_symbols = int(
+        controls[1].number_input(
+            "Symbols",
+            min_value=5,
+            max_value=150,
+            value=max_symbols,
+            step=5,
+            key=f"{key_prefix}_max_symbols",
+        )
+    )
+    if f"{key_prefix}_table" not in st.session_state:
+        with st.spinner("Fetching live Tastytrade quotes..."):
+            st.session_state[f"{key_prefix}_table"] = {
+                "loaded_at": datetime.now().isoformat(timespec="seconds"),
+                "frame": _market_table(service, snapshot, max_symbols=max_symbols),
+            }
+
+    cached = st.session_state[f"{key_prefix}_table"]
+    frame = cached["frame"]
+    if frame.empty:
+        st.info("No target or broker symbols available for a live quote board yet.")
+        return frame
+
+    quote_count = int(frame["quote_ok"].sum()) if "quote_ok" in frame else 0
+    missing = int(len(frame) - quote_count)
+    spread_source = frame["spread_bps"] if "spread_bps" in frame.columns else pd.Series(dtype=float)
+    avg_spread = pd.to_numeric(spread_source, errors="coerce").dropna().mean()
+    wide = pd.to_numeric(spread_source, errors="coerce").dropna()
+    delta_source = frame["delta_notional"] if "delta_notional" in frame.columns else pd.Series(dtype=float)
+    wide_count = int((wide > 25.0).sum()) if len(wide) else 0
+    gross_delta = pd.to_numeric(delta_source, errors="coerce").abs().sum()
+
+    cols = st.columns(5)
+    cols[0].metric("Quoted", f"{quote_count}/{len(frame)}")
+    cols[1].metric("Missing quotes", missing)
+    cols[2].metric("Avg spread", f"{avg_spread:.1f} bps" if pd.notna(avg_spread) else "—")
+    cols[3].metric("Wide spreads", wide_count, help="Symbols with quoted spread wider than 25 bps.")
+    cols[4].metric("Gross drift notional", money(gross_delta) if gross_delta else "—")
+    st.caption(f"Quote board loaded {cached['loaded_at']} local time.")
+
+    columns = [
+        "symbol",
+        "target_w",
+        "broker_qty",
+        "price",
+        "bid",
+        "ask",
+        "spread_bps",
+        "change_pct",
+        "delta_notional",
+        "trade_side_hint",
+        "quote_flag",
+        "spread_flag",
+        "agent_note",
+        "volume",
+        "updated_at",
+    ]
+    display = frame[[col for col in columns if col in frame.columns]].copy()
+    if compact:
+        display = display.head(20)
+    try:
+        st.dataframe(_format_live_table(display), use_container_width=True, hide_index=True)
+    except Exception:
+        st.dataframe(display, use_container_width=True, hide_index=True)
+    return frame
