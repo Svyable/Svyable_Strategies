@@ -3,7 +3,8 @@
 Q23 was mostly offline research. Svyable now has broker connectivity, so the GUI
 should continuously answer the practical PM questions: what are my live marks,
 what names are missing quotes, where are spreads wide, and which target/actual
-names would be expensive to trade right now.
+names would be expensive to trade right now. The table is also structured so a PM
+agent can consume the same target/actual/quote context a human sees.
 """
 
 from __future__ import annotations
