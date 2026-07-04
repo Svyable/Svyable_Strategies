@@ -16,7 +16,7 @@ import streamlit as st
 
 from svyable import dashboard_charts as charts
 from svyable.broker_settings import TastySettings
-from svyable.dashboard_data import clean_returns, numeric_timeseries
+from svyable.dashboard_data import clean_returns
 from svyable.dashboard_positions import render_target_vs_actual
 from svyable.dashboard_service import DashboardService
 from svyable.dashboard_ui import broker_ready, money, percent, render_figure, short_hash
