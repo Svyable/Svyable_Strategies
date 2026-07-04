@@ -5,7 +5,9 @@ workspace. It keeps the safety gates intact while making the execution workflow
 read left-to-right: account → live market → positions/drift → rebalance plan →
 preflight/submit → order tools. It deliberately relies on the existing Tastytrade
 adapter methods already exposed through DashboardService: account, positions,
-orders, quotes, preflight, submit, cancel, and reconciliation.
+orders, quotes, preflight, submit, cancel, and reconciliation. Live quote and
+manual-ticket widgets are designed as shared human/agent context: a person can
+inspect and act, while an agent can reason over the same target/actual/quote rows.
 """
 
 from __future__ import annotations
