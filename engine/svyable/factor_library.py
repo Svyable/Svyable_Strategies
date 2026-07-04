@@ -309,6 +309,24 @@ def _hloc_close_position(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     return (panel.close - lo) / (hi - lo + EPS)
 
 
+def _momentum_divergence(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Beta-driven share of trailing 12-1 momentum (raw minus residual).
+
+    Both legs are cumulative daily returns over the same skipped 12-1 window;
+    since residual = raw - beta*market, their difference is the cumulative
+    market/beta component of the trend. High values mean a name's momentum is
+    carried mostly by market beta rather than idiosyncratic strength — a
+    quality signal whose sign is left to IC, so it is carried as shadow.
+    """
+    skip, formation = 21, 252
+    span = formation - skip
+    min_periods = max(63, span // 2)
+    raw_mom = panel.ret.shift(skip).rolling(span, min_periods=min_periods).sum()
+    residual = residual_returns(panel.ret, panel.market_ret, cfg.beta_win)
+    resid_mom = residual.shift(skip).rolling(span, min_periods=min_periods).sum()
+    return raw_mom - resid_mom
+
+
 def register_extensions() -> None:
     _register(
         "inv_idio",
@@ -469,6 +487,14 @@ def register_extensions() -> None:
         proven=False,
         lineage="monthly high-low range position",
         description="Close position within the trailing 21-bar high-low range, in [0,1].",
+    )
+    _register(
+        "momentum_divergence",
+        "momentum",
+        _momentum_divergence,
+        proven=False,
+        lineage="raw-vs-residual momentum divergence (trend quality)",
+        description="Cumulative beta-driven share of trailing 12-1 momentum.",
     )
 
 

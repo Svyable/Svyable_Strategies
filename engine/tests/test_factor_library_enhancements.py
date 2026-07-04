@@ -28,6 +28,27 @@ EXPECTED_SLEEVE = {
     "return_seasonality": "momentum",
 }
 
+# Later cookbook extensions (technical, volatility, OU/reversal/range, quality).
+# All enter as shadow research: they get no guaranteed weight floor and must earn
+# promotion through the research harness.
+EXTENSION_SHADOW = (
+    "ma_cloud", "vol_breakout", "calm_flow", "vol_surprise", "idio_tail_risk",
+    "ou_zscore_short", "ou_halflife_signal", "lrev", "hloc_close_position",
+    "momentum_divergence",
+)
+EXTENSION_SLEEVE = {
+    "ma_cloud": "momentum",
+    "vol_breakout": "momentum",
+    "calm_flow": "defensive",
+    "vol_surprise": "defensive",
+    "idio_tail_risk": "defensive",
+    "ou_zscore_short": "meanrev",
+    "ou_halflife_signal": "meanrev",
+    "lrev": "meanrev",
+    "hloc_close_position": "momentum",
+    "momentum_divergence": "momentum",
+}
+
 
 def _panel():
     return SyntheticProvider(n_assets=40, n_days=900, seed=7).get_panel()
@@ -80,9 +101,43 @@ def test_new_factors_flow_through_research_harness():
     assert "validated" not in shadow_states
 
 
+def test_extension_factors_are_shadow_with_expected_sleeves():
+    """Every later extension factor registers under the intended sleeve with a
+    lineage and enters as shadow — no guaranteed floor until IC evidence."""
+    for name in EXTENSION_SHADOW:
+        assert name in flib.legacy.REGISTRY, f"{name} not registered"
+        assert flib.legacy.REGISTRY[name]["sleeve"] == EXTENSION_SLEEVE[name]
+        assert flib.legacy.REGISTRY[name].get("lineage"), f"{name} missing lineage"
+        assert flib.is_proven(name) is False, f"{name} must be shadow"
+
+    metadata = flib.factor_metadata(list(EXTENSION_SHADOW))
+    assert set(metadata["stage"]) == {"shadow"}
+    assert not metadata["guaranteed_floor"].any()
+
+
+def test_extension_factors_compute_and_flow_through_harness():
+    """Extension factors compute finite cross-sectional scores and land in a
+    defined promotion state; being shadow, they can never reach 'validated'."""
+    cfg = nasdaq_lo_config()
+    panel = _panel()
+
+    scores = flib.compute_all(panel, cfg, names=list(EXTENSION_SHADOW))
+    for name in EXTENSION_SHADOW:
+        tail = scores[name].iloc[-63:]
+        assert np.isfinite(tail.to_numpy()).any(), f"{name} all-NaN in tail"
+        assert (tail.std(axis=1).dropna() > 1e-9).any(), f"{name} has no spread"
+
+    report = factor_report(panel, cfg, names=list(EXTENSION_SHADOW))
+    assert set(EXTENSION_SHADOW).issubset(set(report.index))
+    assert report.loc[list(EXTENSION_SHADOW), "promotion_state"].notna().all()
+    assert "validated" not in set(report.loc[list(EXTENSION_SHADOW), "promotion_state"])
+
+
 if __name__ == "__main__":
     test_new_factors_registered_with_expected_sleeves()
     test_maturity_staging_matches_intent()
     test_factors_compute_finite_cross_sectional_scores()
     test_new_factors_flow_through_research_harness()
+    test_extension_factors_are_shadow_with_expected_sleeves()
+    test_extension_factors_compute_and_flow_through_harness()
     print("ok")
