@@ -10,7 +10,7 @@ validated market panel
   -> immutable candidate board
   -> deterministic / agent PM selection
   -> user-approved canonical portfolio
-  -> Tastytrade sandbox execution and reconciliation
+  -> sandbox execution and reconciliation
 ```
 
 The objective is effective systematic trading, not complexity for its own sake: differentiated alpha sources, controlled beta participation, robust volatility and turbulence avoidance, honest transaction costs, observable decisions, and one safe execution boundary.
@@ -26,6 +26,7 @@ Implemented:
 - Vendor-agnostic daily OHLCV panel with validation, caching, and point-in-time processing discipline.
 - Price-action, residual, defensive, reversal, liquidity, behavioral, frontier tape-reading, and clearly labeled daily-flow proxy factors.
 - Portfolio Arcana analytics for market-model residual alpha, idiosyncratic volatility, idio information ratio, factor exposures, and symbol-level residual contributors.
+- Agent PM context-pack harness that converts the immutable candidate board into `agent_context.json`, `agent_pm_memo.md`, and a hash-matched decision template while forbidding same-cycle repo self-modification.
 - Purged causal IC weighting with uncertainty, hit-rate, coverage, and redundancy controls.
 - Complete strategy registry: every strategy owns factors, construction, concentration, risk, cost, cadence, and maturity.
 - Svyable Frontier Price Action strategy candidate built from channel pressure, compression thrust, gap continuation, range participation, and range rejection plus institutional trend and resilience controls.
@@ -35,13 +36,13 @@ Implemented:
 - Deterministic, manual, and two-phase agent selection with immutable candidate hashes and explicit user approval.
 - Institutional scorecards covering alpha, beta, capture, tails, risk, turnover, costs, and beta-adjusted residual return.
 - Streamlit PM Command Center, Agent Lab, Analytics/Arcana, Factor Governance, Factor Health, Portfolio Ops, and audit surfaces.
-- Typed community `tastytrade` SDK adapter with sandbox preflight, submission, polling, cancellation, fills, slippage, delayed-fill recovery, reconciliation, and audit.
+- Typed community SDK adapter with sandbox preflight, submission, polling, cancellation, fills, slippage, delayed-fill recovery, reconciliation, and audit.
 
 Not true yet:
 
 - No live-capital performance is claimed.
 - Production bulk submission from Streamlit remains disabled.
-- The strategy and chimera registry has not yet accumulated a sustained Tastytrade sandbox operating record.
+- The strategy and chimera registry has not yet accumulated a sustained sandbox operating record.
 - Seed-universe historical tests remain survivorship-biased unless explicitly labeled point-in-time.
 - Institutional metrics are engineering evidence, not promised future returns.
 
@@ -54,7 +55,7 @@ only an approved canonical portfolio ever reaches the broker.
 ```mermaid
 flowchart TB
     subgraph DATA["Market data"]
-        PROV["providers.py<br/>YFinance / Tastytrade"]
+        PROV["providers.py"]
         UNI["universe.py"]
         CAL["calendar.py"]
         PANEL["panel.py<br/>OHLCV panel + validate"]
@@ -87,12 +88,14 @@ flowchart TB
     subgraph SEL["Selection + activation"]
         DAILY["strategy_daily.py<br/>weekday runner"]
         SELECT["strategy_selector.py<br/>candidate board + hash"]
+        HARNESS["agent_pm_harness.py<br/>context pack + rails"]
         ACT["strategy_activation.py<br/>one canonical portfolio"]
+        DAILY --> SELECT --> HARNESS --> ACT
     end
     subgraph EXE["Execution + ledger"]
         REB["rebalancer.py<br/>plan / execute / reconcile"]
         GUARD["submission_guard.py<br/>execution_control.py"]
-        BRK["brokers.py<br/>tastytrade_sdk.py"]
+        BRK["brokers.py<br/>broker adapter"]
         LED["ledger.py"]
     end
 ```
