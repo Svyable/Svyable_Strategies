@@ -104,6 +104,23 @@ def _write_position_snapshot(
     return path
 
 
+def _write_agent_context_pack(args, selection, ledger: Ledger) -> dict[str, str] | None:
+    try:
+        from svyable.agent_pm_harness import write_agent_pm_pack
+
+        pack = write_agent_pm_pack(args.out, board_dir=selection.board_dir)
+        return {
+            "agent_context": str(pack.context_path),
+            "agent_memo": str(pack.memo_path),
+            "agent_decision_template": str(pack.template_path),
+        }
+    except Exception as exc:
+        message = f"agent PM context pack generation failed: {exc}"
+        print(f"WARNING: {message}", file=sys.stderr)
+        ledger.record_event("warning", "agent_pm_harness", message)
+        return None
+
+
 def run(args) -> int:
     ledger = Ledger(Path(args.out) / "ledger.db")
     try:
@@ -179,6 +196,7 @@ def run(args) -> int:
         )
 
         awaiting_agent = policy.mode == "agent" or args.evaluate_only
+        agent_pack = _write_agent_context_pack(args, selection, ledger) if awaiting_agent else None
         if awaiting_agent:
             decision = selection.decision
             status = "awaiting_agent" if policy.mode == "agent" else "evaluated"
@@ -220,6 +238,7 @@ def run(args) -> int:
                 "awaiting_agent": awaiting_agent,
                 "provider": panel.meta.get("provider"),
                 "adjustment": panel.meta.get("adjustment"),
+                "agent_context_pack": agent_pack,
             },
             output_dir=str(canonical_output or selection.board_dir),
         )
@@ -237,10 +256,12 @@ def run(args) -> int:
             "candidate_board": str(selection.board_dir / "candidate_board.csv"),
             "canonical_output": canonical_output,
         }
+        if agent_pack:
+            output.update(agent_pack)
         if policy.mode == "agent":
             output["next_step"] = (
-                "Review the board, write strategy_selection/agent_decision.json, "
-                "then run `python -m svyable.strategy_activate`."
+                "Review agent_pm_memo.md, write strategy_selection/agent_decision.json "
+                "using only an allowed candidate_id, then run `python -m svyable.strategy_activate`."
             )
         print(json.dumps(output, indent=2, default=str))
 
