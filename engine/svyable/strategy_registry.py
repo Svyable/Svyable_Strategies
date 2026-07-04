@@ -605,6 +605,47 @@ register(StrategySpec(
 ))
 
 
+# Cookbook OU + Reversal + Multi-Timeframe families: a fast statistical-arbitrage
+# book that fades range extremes — short and medium OU z-scores, reversion speed
+# (inverse half-life), short and one-month reversal, and monthly range position —
+# with tight cost-aware controls. Distinct from q23_ou_mean_reversion by its
+# faster factors and range-consolidation identity.
+register(StrategySpec(
+    strategy_id="q23_range_reversal",
+    display_name="Q23 Range Reversal",
+    family="fast statistical reversal",
+    description=(
+        "Range-consolidation reversal: short and medium Ornstein-Uhlenbeck "
+        "z-scores, inverse-half-life reversion speed, short and one-month "
+        "reversal, and monthly range position, with liquidity, turnover, and "
+        "idiosyncratic-risk controls. Fast and cost-sensitive."
+    ),
+    factor_names=tuple(dict.fromkeys((
+        # OU / reversal core (incl. new fast factors)
+        "ou_zscore", "ou_zscore_short", "ou_halflife_signal",
+        "ou_predicted_return", "srev", "lrev", "resid_srev",
+        "mean_reversion_speed", "disposition_alpha", "hloc_close_position",
+        # risk / implementation controls
+        "inv_vol", "gk_inv_vol", "inv_idio", "low_corr", "liquidity",
+        "turnover_vol_inv",
+    ))),
+    config_overrides={
+        "ml_enabled": False,
+        "seats_base": 22,
+        "seats_min": 18,
+        "seats_max": 28,
+        "score_smooth_win": 2,
+        "weight_smooth_alpha": 0.55,
+        "no_trade_band": 0.025,
+        "target_vol": 0.12,
+        "tc_bps": 4.0,
+    },
+    minimum_hold_days=1,
+    pitch_role="fast range-reversal statistical alpha",
+    regime_profile="fast",
+))
+
+
 def get_strategy(strategy_id: str) -> StrategySpec:
     try:
         return _REGISTRY[strategy_id]

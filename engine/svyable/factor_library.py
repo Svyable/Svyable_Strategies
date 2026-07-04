@@ -264,6 +264,51 @@ def _idio_tail_risk(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     return residual.rolling(window, min_periods=max(21, window // 2)).quantile(0.05)
 
 
+def _ou_zscore_short(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Short-window Ornstein-Uhlenbeck reversion z-score.
+
+    The same rolling AR(1)/OU state estimator as ``ou_zscore`` but fit on the
+    short window (``ou_short_win``), so it reacts to faster range-bound
+    reversion. Negated so a rich name (price above its OU mean) scores low.
+    """
+    return -legacy._ou_params(panel, cfg.ou_short_win, cfg)["zscore"]
+
+
+def _ou_halflife_signal(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Inverse OU half-life: faster mean reversion is the stronger opportunity.
+
+    Half-life comes from the same rolling OU fit (bounded by ou_halflife_min and
+    ou_halflife_max); its inverse ranks names whose deviations decay quickly, so
+    a reversion trade is expected to realize sooner.
+    """
+    half_life = legacy._ou_params(panel, cfg.ou_med_win, cfg)["half_life"]
+    return 1.0 / (half_life + EPS)
+
+
+def _lrev(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Intermediate-horizon (one-month) price reversal.
+
+    Negative trailing return over ``mom_short`` days — the complement to the
+    5-day ``srev``; captures mean reversion after sustained one-month moves
+    rather than very short-term noise.
+    """
+    return -(panel.close / (panel.close.shift(cfg.mom_short) + EPS) - 1.0)
+
+
+def _hloc_close_position(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
+    """Close position within the trailing monthly high-low range.
+
+    ``(close - min_low) / (max_high - min_low)`` over ~21 bars, in [0, 1]. High
+    values mean the name is closing near the top of its recent range (strength
+    within consolidation); distinct from ``breakout``, which measures the
+    volatility-scaled distance beyond the prior high.
+    """
+    window = 21
+    hi = panel.high.rolling(window, min_periods=window // 2).max()
+    lo = panel.low.rolling(window, min_periods=window // 2).min()
+    return (panel.close - lo) / (hi - lo + EPS)
+
+
 def register_extensions() -> None:
     _register(
         "inv_idio",
@@ -392,6 +437,38 @@ def register_extensions() -> None:
         proven=False,
         lineage="idiosyncratic left-tail (crash asymmetry)",
         description="5th-percentile residual return; higher means a thinner left tail.",
+    )
+    _register(
+        "ou_zscore_short",
+        "meanrev",
+        _ou_zscore_short,
+        proven=False,
+        lineage="short-window Ornstein-Uhlenbeck reversion",
+        description="Negated short-window OU z-score for fast range reversion.",
+    )
+    _register(
+        "ou_halflife_signal",
+        "meanrev",
+        _ou_halflife_signal,
+        proven=False,
+        lineage="Ornstein-Uhlenbeck reversion speed",
+        description="Inverse OU half-life; higher means faster mean reversion.",
+    )
+    _register(
+        "lrev",
+        "meanrev",
+        _lrev,
+        proven=False,
+        lineage="intermediate-horizon reversal",
+        description="Negative trailing one-month return (mom_short horizon).",
+    )
+    _register(
+        "hloc_close_position",
+        "momentum",
+        _hloc_close_position,
+        proven=False,
+        lineage="monthly high-low range position",
+        description="Close position within the trailing 21-bar high-low range, in [0,1].",
     )
 
 

@@ -13,7 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from svyable.providers import SyntheticProvider
 from svyable.strategy_activation import activate_latest_selection
-from svyable.strategy_registry import default_strategy_ids, get_strategy, registry_frame
+from svyable.strategy_registry import (
+    default_strategy_ids,
+    get_strategy,
+    list_strategies,
+    registry_frame,
+)
 from svyable.strategy_selector import (
     SelectionPolicy,
     _deterministic_choice,
@@ -35,6 +40,28 @@ def test_registry_contains_distinct_complete_strategies():
         get_strategy("q23_ou_mean_reversion").config_overrides["no_trade_band"]
         < get_strategy("q23_low_turnover").config_overrides["no_trade_band"]
     )
+
+
+def test_every_strategy_builds_and_computes_factors():
+    """Every registered strategy must build a valid config and have all of its
+    declared factors wired to the live factor library and computable non-empty.
+    Guards new factors/strategies against silent drift from the registry."""
+    from svyable import factor_library as flib
+
+    panel = SyntheticProvider(n_assets=30, n_days=420, seed=5).get_panel()
+    available = set(flib.factor_metadata().index)
+    specs = list_strategies(include_experimental=True)
+    assert len(specs) >= 12
+    for spec in specs:
+        spec.validate()
+        cfg = spec.build_config()
+        assert cfg.seats_min <= cfg.seats_base <= cfg.seats_max, spec.strategy_id
+        assert len(spec.factor_names) == len(set(spec.factor_names)), spec.strategy_id
+        assert set(spec.factor_names) <= available, spec.strategy_id
+        scores = flib.compute_all(panel, cfg, names=list(spec.factor_names))
+        for name in spec.factor_names:
+            assert name in scores, (spec.strategy_id, name)
+            assert scores[name].iloc[-1].notna().any(), (spec.strategy_id, name)
 
 
 def test_concentrated_flagship_matches_mandate():
@@ -223,6 +250,8 @@ def test_agent_activation_is_canonical_and_idempotent():
 
 if __name__ == "__main__":
     test_registry_contains_distinct_complete_strategies()
+    test_every_strategy_builds_and_computes_factors()
+    test_concentrated_flagship_matches_mandate()
     test_switch_requires_cost_aware_buffer()
     test_synthetic_candidate_board_runs_complete_strategies()
     test_agent_activation_is_canonical_and_idempotent()
