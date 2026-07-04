@@ -2,9 +2,9 @@
 
 The goal of this page is to make the default `streamlit` launch feel like the PM's
 morning cockpit: agent state, strategy artifact freshness, full-frontier coverage,
-Tastytrade account/position state, live quote sanity checks, PM readiness gates,
-and the next safe operating actions on one screen. Deeper research and order
-submission still live behind the dedicated tabs.
+broker state, live quote sanity checks, PM readiness gates, ledger equity/drift
+evidence, and the next safe operating actions on one screen. Deeper research and
+specialized broker workflows still live behind dedicated tabs.
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ def _safe_ledger_snapshot(service: DashboardService) -> dict:
 def _broker_snapshot_card(service: DashboardService, settings: TastySettings) -> dict | None:
     if not broker_ready(settings):
         st.info(
-            "Tastytrade is not connected yet. Strategy, agent, and local artifact views still work; "
-            "connect the broker from the sidebar to unlock account state, quotes, preflight, and execution."
+            "Broker connection is not configured yet. Strategy, agent, and local artifact views still work; "
+            "connect credentials from the sidebar to unlock broker data, quotes, and planning."
         )
         return None
 
@@ -49,7 +49,7 @@ def _broker_snapshot_card(service: DashboardService, settings: TastySettings) ->
         st.session_state.pop("command_live_market_table", None)
     if cache_key not in st.session_state:
         try:
-            with st.spinner("Loading Tastytrade account, positions, and orders..."):
+            with st.spinner("Loading broker state..."):
                 st.session_state[cache_key] = {
                     "loaded_at": datetime.now().isoformat(timespec="seconds"),
                     "data": service.broker_snapshot(),
@@ -76,7 +76,7 @@ def _broker_snapshot_card(service: DashboardService, settings: TastySettings) ->
     cols[5].metric("Open positions", 0 if positions.empty else len(positions))
 
     order_count = 0 if orders.empty else len(orders)
-    st.caption(f"Orders returned for today: **{order_count}**. Full order controls are in Portfolio Ops.")
+    st.caption(f"Rows returned for today: **{order_count}**. Full broker workflow is in Portfolio Ops.")
     return snapshot
 
 
@@ -163,7 +163,7 @@ def _frontier_card(strategy_service: StrategySelectionService) -> pd.DataFrame:
 def _quick_rebalance_preview(service: DashboardService, settings: TastySettings) -> None:
     st.subheader("Next PM action")
     if not broker_ready(settings):
-        st.caption("Broker-dependent rebalance preview is unavailable until Tastytrade is connected.")
+        st.caption("Broker-dependent rebalance preview is unavailable until broker credentials are configured.")
         return
 
     min_notional = st.number_input(
@@ -183,11 +183,11 @@ def _quick_rebalance_preview(service: DashboardService, settings: TastySettings)
 
     plan = st.session_state.get("command_rebalance_plan")
     if not plan:
-        st.caption("Build a preview to see planned orders, stale inputs, ADV caps, and safety gates.")
+        st.caption("Build a preview to see planned rows, stale inputs, ADV caps, and safety gates.")
         return
 
     cols = st.columns(5)
-    cols[0].metric("Orders", len(plan.get("orders", [])))
+    cols[0].metric("Planned rows", len(plan.get("orders", [])))
     cols[1].metric("Safety", "PASS" if plan.get("safety_complete") else "BLOCKED")
     cols[2].metric("ADV capped", plan.get("adv_capped_orders", 0))
     cols[3].metric("Est. turnover", money(plan.get("estimated_turnover")))
@@ -206,10 +206,30 @@ def _quick_rebalance_preview(service: DashboardService, settings: TastySettings)
 
     orders = pd.DataFrame(plan.get("orders", []))
     if orders.empty:
-        st.success("Portfolio is within the configured order threshold; no orders planned.")
+        st.success("Portfolio is within the configured threshold; no rows planned.")
     else:
         st.dataframe(orders, use_container_width=True, hide_index=True)
-        st.caption("Use Portfolio Ops for broker preflight, typed confirmation, submission, cancellations, and quote lookup.")
+        st.caption("Use Portfolio Ops for the complete review workflow.")
+
+
+def _render_equity_and_drift(ledger: dict) -> None:
+    equity = ledger.get("equity", pd.DataFrame()).copy()
+    if equity.empty or "d" not in equity.columns:
+        st.caption("No paper-vs-shadow equity ledger yet.")
+        return
+    equity["d"] = pd.to_datetime(equity["d"], errors="coerce")
+    equity = equity.dropna(subset=["d"]).set_index("d").sort_index()
+    if equity.empty:
+        st.caption("No valid equity timestamps in the ledger yet.")
+        return
+
+    columns = [col for col in ["shadow_nav", "paper_equity"] if col in equity.columns]
+    if columns:
+        st.markdown("**Shadow and paper equity**")
+        st.line_chart(equity[columns])
+    if "drift_bps" in equity.columns:
+        st.markdown("**Paper vs shadow return drift**")
+        st.line_chart(equity[["drift_bps"]])
 
 
 def render_command_center(
@@ -220,8 +240,8 @@ def render_command_center(
 ) -> None:
     st.subheader("🧠 Agentic portfolio command center")
     st.caption(
-        "One-screen operating view: strategy artifacts, candidate frontier, live Tastytrade account/quote state, "
-        "agent readiness gates, and the next safe PM actions. Research and execution details are one tab away."
+        "One-screen operating view: strategy artifacts, candidate frontier, live broker/quote state, "
+        "agent readiness gates, and the next safe PM actions. Research and specialized workflows are one tab away."
     )
 
     ledger = _safe_ledger_snapshot(service)
@@ -236,6 +256,9 @@ def render_command_center(
     cols[4].metric("Critical 7d", health.get("critical_7d", 0))
     cols[5].metric("Output root", root_label)
 
+    with st.expander("Paper vs shadow ledger", expanded=False):
+        _render_equity_and_drift(ledger)
+
     st.divider()
     st.subheader("Strategy artifact and shadow NAV")
     strategy_snapshot = _strategy_artifact_card(service)
@@ -245,7 +268,7 @@ def render_command_center(
     _frontier_card(strategy_service)
 
     st.divider()
-    st.subheader("Tastytrade account state")
+    st.subheader("Broker state")
     broker_snapshot = _broker_snapshot_card(service, settings)
     market_frame = pd.DataFrame()
     if broker_snapshot is not None:
