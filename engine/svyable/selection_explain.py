@@ -2,8 +2,8 @@
 
 This module turns candidate-board rows into plain, auditable explanations:
 why the focus candidate is preferred, which alternatives are close, and why
-blocked candidates are blocked. It is deliberately artifact-derived and does not
-attempt to reveal hidden model reasoning.
+blocked candidates are blocked. It is artifact-derived and avoids hidden model
+reasoning.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ def _row_by_candidate(board: pd.DataFrame, candidate_id: str | None) -> pd.Serie
 
 
 def explain_blockers(row: pd.Series) -> list[str]:
-    """Return human-readable blocking reasons for one candidate row."""
     reasons: list[str] = []
     if not _truthy(row.get("eligible")):
         reasons.append("not eligible under selector policy")
@@ -52,7 +51,6 @@ def explain_blockers(row: pd.Series) -> list[str]:
 
 
 def candidate_delta(focus: pd.Series, other: pd.Series) -> dict[str, Any]:
-    """Compare one alternative against the focus candidate."""
     fields = [
         "utility_bps",
         "expected_alpha_bps",
@@ -85,10 +83,11 @@ def explain_candidate_choice(
     selected_candidate_id: str | None,
     max_alternatives: int = 8,
 ) -> dict[str, Any]:
-    """Explain a selected/focus candidate against alternatives on the board."""
     if board.empty:
         return {"status": "empty_board", "summary": "No candidate board available.", "alternatives": []}
-    focus = _row_by_candidate(board, selected_candidate_id) or board.iloc[0]
+    focus = _row_by_candidate(board, selected_candidate_id)
+    if focus is None:
+        focus = board.iloc[0]
     focus_id = str(focus.get("candidate_id", ""))
     ordered = board.sort_values("utility_bps", ascending=False) if "utility_bps" in board.columns else board
     alternatives = []
@@ -119,7 +118,6 @@ def explain_candidate_choice(
 
 
 def activation_readiness_from_context(context: dict[str, Any]) -> dict[str, Any]:
-    """Summarize whether the context pack is ready for a decision file."""
     rails = context.get("rails", {}) or {}
     health = context.get("focus_candidate_artifact_health", {}) or {}
     allowed = rails.get("allowed_candidate_ids", []) or []
@@ -135,5 +133,5 @@ def activation_readiness_from_context(context: dict[str, Any]) -> dict[str, Any]
         "status": status,
         "allowed_candidate_count": len(allowed),
         "issues": issues,
-        "next_step": "write hash-matched agent_decision.json" if status == "PASS" else "refresh board/artifacts before decision",
+        "next_step": "prepare decision artifact" if status == "PASS" else "refresh board/artifacts before decision",
     }
