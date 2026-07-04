@@ -64,14 +64,14 @@ def test_market_table_combines_targets_positions_and_quotes():
 
     assert set(table["symbol"]) == {"AAPL", "MSFT", "TSLA"}
     aapl = table.set_index("symbol").loc["AAPL"]
-    assert aapl["quote_ok"] is True
+    assert bool(aapl["quote_ok"]) is True
     assert aapl["target_notional"] == 20_000.0
     assert aapl["current_notional"] == 10_000.0
     assert aapl["delta_notional"] == 10_000.0
     assert abs(float(aapl["spread_bps"]) - 10.0) < 1e-9
 
     tsla = table.set_index("symbol").loc["TSLA"]
-    assert tsla["quote_ok"] is False
+    assert bool(tsla["quote_ok"]) is False
     assert tsla["broker_qty"] == -3.0
 
 
