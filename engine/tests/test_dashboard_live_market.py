@@ -1,4 +1,9 @@
-"""Tests for the live market quote-board transformations."""
+"""Tests for the live market quote-board transformations.
+
+These are intentionally broker-free. They prove that the GUI's live-market layer
+can merge target weights, broker positions, live quotes, spread math, and stale
+quote fallbacks before the real Tastytrade adapter is involved.
+"""
 
 from __future__ import annotations
 
