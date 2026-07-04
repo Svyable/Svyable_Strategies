@@ -1,4 +1,9 @@
-"""Interactive Svyable Tastytrade and agentic strategy operations console."""
+"""Interactive Svyable Tastytrade and agentic strategy operations console.
+
+The default app is intentionally compact: Command Center first, then Agent Lab,
+Analytics, Factors, Portfolio Ops, and Audit. Broker/rebalance controls are
+consolidated under Portfolio Ops rather than split across multiple top-level tabs.
+"""
 
 from __future__ import annotations
 
