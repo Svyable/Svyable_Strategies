@@ -1,9 +1,7 @@
 # Install from the engine/ directory:
 #   python -m pip install -r requirements.txt
--e .[ml]
-streamlit>=1.36
-python-dotenv>=1.0
-tastytrade>=12.4,<13
-pandas>=2.1
-matplotlib>=3.8
-watchdog>=4.0
+#
+# This pulls the package plus the full research, GUI, broker-adapter, and test
+# extras declared in pyproject.toml so local smoke/regression checks match the
+# Streamlit + agent PM harness workflow.
+-e .[all,dev]
