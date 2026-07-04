@@ -12,8 +12,16 @@ from typing import Any
 import pandas as pd
 
 from svyable.strategy_activation import activate_latest_selection
-from svyable.strategy_blend import blend_frame, blend_spec_from_dict
-from svyable.strategy_registry import get_strategy, registry_frame
+from svyable.strategy_blend import (
+    blend_frame,
+    blend_spec_from_dict,
+    default_blend_ids,
+)
+from svyable.strategy_registry import (
+    default_strategy_ids,
+    get_strategy,
+    registry_frame,
+)
 from svyable.strategy_selector import (
     CANONICAL_STRATEGY_ID,
     SelectionPolicy,
@@ -57,8 +65,93 @@ class StrategySelectionService:
     def save_policy(self, policy: SelectionPolicy) -> Path:
         return save_policy(self.output_root, policy)
 
+    def save_full_frontier_policy(self) -> Path:
+        """Enable every default registered strategy and default chimera.
+
+        This is intentionally an explicit operator action, not a silent policy
+        migration. A stale or intentionally narrow policy is the common reason
+        Alpha Lab shows only a handful of candidates even after the codebase has
+        a much larger registry.
+        """
+        from dataclasses import replace
+
+        policy = self.policy()
+        updated = replace(
+            policy,
+            enabled_strategy_ids=tuple(default_strategy_ids()),
+            enabled_blend_ids=tuple(default_blend_ids()),
+        )
+        return self.save_policy(updated)
+
     def blend_registry(self) -> pd.DataFrame:
         return blend_frame()
+
+    def frontier_status(self) -> dict[str, Any]:
+        """Explain how much of the registered frontier the latest board covers."""
+        registry = self.registry()
+        blends = self.blend_registry()
+        policy = self.policy()
+        board = self.latest_board()
+        board_dir = self.latest_board_dir()
+
+        enabled_strategy_ids = tuple(policy.enabled_strategy_ids)
+        custom_blend_ids = tuple(
+            str(item.get("blend_id"))
+            for item in policy.custom_blends
+            if item.get("blend_id")
+        )
+        enabled_blend_ids = tuple(policy.enabled_blend_ids) + custom_blend_ids
+        expected_candidate_count = len(enabled_strategy_ids) + len(enabled_blend_ids) + 1
+
+        if board.empty or "candidate_id" not in board.columns:
+            board_ids: set[str] = set()
+            board_strategy_ids: set[str] = set()
+            board_blend_ids: set[str] = set()
+            board_as_of = None
+        else:
+            board_ids = set(board["candidate_id"].astype(str))
+            board_strategy_ids = {
+                candidate_id
+                for candidate_id in board_ids
+                if candidate_id != "hold_current" and not candidate_id.startswith("chimera_")
+            }
+            board_blend_ids = {
+                candidate_id for candidate_id in board_ids if candidate_id.startswith("chimera_")
+            }
+            board_as_of = str(board.iloc[0].get("as_of", "")) or None
+
+        missing_strategies = sorted(set(enabled_strategy_ids) - board_strategy_ids)
+        missing_blends = sorted(set(enabled_blend_ids) - board_blend_ids)
+        is_incomplete = bool(board.empty or missing_strategies or missing_blends)
+        if board.empty:
+            explanation = "No latest candidate board exists. Run a fresh evaluation."
+        elif is_incomplete:
+            explanation = (
+                "Latest candidate board is narrower than the current policy frontier. "
+                "Enable the full default frontier if desired, then run a fresh evaluation."
+            )
+        else:
+            explanation = "Latest candidate board covers every enabled strategy and chimera."
+
+        return {
+            "registry_strategy_count": int(len(registry)),
+            "default_strategy_count": int(len(default_strategy_ids())),
+            "blend_registry_count": int(len(blends)),
+            "default_blend_count": int(len(default_blend_ids())),
+            "policy_strategy_count": int(len(enabled_strategy_ids)),
+            "policy_blend_count": int(len(policy.enabled_blend_ids)),
+            "custom_blend_count": int(len(custom_blend_ids)),
+            "expected_candidate_count": int(expected_candidate_count),
+            "board_candidate_count": int(len(board)),
+            "board_strategy_count": int(len(board_strategy_ids)),
+            "board_blend_count": int(len(board_blend_ids)),
+            "missing_enabled_strategy_ids": missing_strategies,
+            "missing_enabled_blend_ids": missing_blends,
+            "board_dir": str(board_dir) if board_dir else "",
+            "board_as_of": board_as_of,
+            "is_incomplete_latest_board": is_incomplete,
+            "explanation": explanation,
+        }
 
     def add_custom_blend(self, payload: dict[str, Any]) -> Path:
         """Validate and persist a user-defined chimera with the policy. The
@@ -291,6 +384,7 @@ strategy before writing the canonical Tastytrade weights.
             "board": self.latest_board(),
             "decision": self.latest_decision(),
             "pending_agent_decision": self.pending_agent_decision(),
+            "frontier_status": self.frontier_status(),
             "policy_path": str(policy_path(self.output_root)),
             "agent_decision_path": str(agent_decision_path(self.output_root)),
         }
