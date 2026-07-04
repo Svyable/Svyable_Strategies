@@ -8,12 +8,18 @@ import pandas as pd
 import streamlit as st
 
 from svyable.broker_settings import TastySettings
+from svyable.dashboard_positions import (
+    render_position_analytics,
+    render_target_vs_actual,
+)
 from svyable.dashboard_service import DashboardService
-from svyable.dashboard_ui import cancellation_confirmation, money
+from svyable.dashboard_ui import cancellation_confirmation, money, render_broker_gate
 from svyable.sandbox_check import run_sandbox_check
 
 
 def render_broker(service: DashboardService, settings: TastySettings) -> None:
+    if not render_broker_gate(settings):
+        return
     st.caption("Broker state and order controls use the typed `tastytrade>=12` adapter.")
     cache_key = f"broker_snapshot::{settings.environment}::{service.output_root}"
     refresh = st.button("Refresh broker account snapshot", type="primary")
@@ -37,9 +43,17 @@ def render_broker(service: DashboardService, settings: TastySettings) -> None:
     cols = st.columns(5)
     cols[0].metric("Environment", snapshot["environment"].upper())
     cols[1].metric("Account", masked)
-    cols[2].metric("Net liq", money(account.get("equity")))
-    cols[3].metric("Cash", money(account.get("cash")))
-    cols[4].metric("Maintenance excess", money(account.get("maintenance_excess")))
+    cols[2].metric(
+        "Net liq",
+        money(account.get("equity")),
+        help="Net liquidating value — total account value if all positions closed now.",
+    )
+    cols[3].metric("Cash", money(account.get("cash")), help="Settled cash balance.")
+    cols[4].metric(
+        "Maintenance excess",
+        money(account.get("maintenance_excess")),
+        help="Buying power above the maintenance-margin requirement; negative risks a call.",
+    )
 
     st.subheader("Sandbox connectivity check")
     st.caption(
@@ -59,12 +73,24 @@ def render_broker(service: DashboardService, settings: TastySettings) -> None:
         except Exception as exc:
             st.error(str(exc))
 
-    st.subheader("Positions")
     positions = snapshot["positions"]
-    if positions.empty:
-        st.info("No positions.")
-    else:
-        st.dataframe(positions, use_container_width=True, hide_index=True)
+    render_position_analytics(positions)
+
+    if not positions.empty:
+        try:
+            targets = service.target_series()
+        except FileNotFoundError:
+            targets = None
+        if targets is not None and not targets.empty:
+            net_liq = account.get("equity")
+            render_target_vs_actual(
+                positions, targets, float(net_liq) if net_liq else None
+            )
+        else:
+            st.caption(
+                "Run `svyable daily` to generate strategy target weights and unlock the "
+                "target-vs-actual drift view here."
+            )
 
     st.subheader("Orders today")
     orders = snapshot["orders"]

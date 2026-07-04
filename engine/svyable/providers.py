@@ -1,6 +1,18 @@
-"""Data providers behind one protocol (plan.md §B.1). Ships with a yfinance EOD
-adapter + local parquet cache — the at-home feed. Any commercial vendor is a
-new class with the same two methods.
+"""Data providers behind one protocol (plan.md §B.1). Every vendor is a class
+with the same two methods emitting the same Panel + parquet cache format:
+
+  YFinanceProvider  — EOD OHLCV, auto_adjust=True => ADJ_TOTAL_RETURN (deep,
+                      free, dividend-adjusted). The backfill + validation oracle.
+  TastytradeProvider — DXLink daily candles => ADJ_SPLIT_ONLY (one vendor for
+                      broker AND data, but NOT dividend-adjusted; live/tail feed).
+  SyntheticProvider  — deterministic, offline.
+
+Adjustment regime (Panel.meta["adjustment"]): the two real feeds are NOT
+interchangeable — total-return and split-only closes diverge on every
+dividend-paying name. That is a return bias, not noise, so a swap must clear
+panel_parity() first. Yahoo stays as the deep adjusted reference; Tasty is
+canonical for live/incremental once parity holds. Never concatenate the two
+caches blind — detect_restatement() will (correctly) fire on the seam.
 
 PIT caveat (documented, not hidden): the seed universe file is a *current*
 liquid-NASDAQ list, so deep backtests carry survivorship bias. Fine for
@@ -21,6 +33,15 @@ import pandas as pd
 from svyable.panel import Panel
 
 FIELDS = ["open", "high", "low", "close", "volume"]
+
+# Price-adjustment regime declared in Panel.meta["adjustment"]. Backtests must
+# never silently mix regimes: total-return series (dividend reinvested) and
+# split-only series diverge on every dividend-paying name, and that divergence
+# is a return bias, not noise. panel_parity() is the gate that proves two feeds
+# agree before one is swapped for the other.
+ADJ_TOTAL_RETURN = "total_return"  # split + dividend adjusted (yfinance auto_adjust)
+ADJ_SPLIT_ONLY = "split_only"      # split adjusted, raw close (DXLink daily candles)
+ADJ_SYNTHETIC = "synthetic"        # generated, not a market feed
 
 
 class DataProvider(Protocol):
@@ -120,6 +141,7 @@ class YFinanceProvider:
         s = slice(pd.Timestamp(start), pd.Timestamp(end) if end else None)
         frames = {f: cached[f].loc[s] for f in FIELDS}
         return Panel(**frames, meta={"provider": "yfinance",
+                                     "adjustment": ADJ_TOTAL_RETURN,
                                      "universe_file": str(self.universe_file)})
 
 
@@ -137,6 +159,49 @@ def detect_restatement(old_close: pd.DataFrame, fresh_close: pd.DataFrame,
     rel = ((a - b).abs() / (a.abs() + 1e-9))
     bad = rel.max() > tol
     return sorted(common_cols[bad.fillna(False)])
+
+
+def panel_parity(a: Panel, b: Panel, tol: float = 0.002) -> dict:
+    """Reconcile two providers' close panels — the gate before one feed is
+    swapped for another (roadmap: make Tasty canonical only when it agrees with
+    the adjusted reference within tolerance).
+
+    Compares close on the overlapping (date, symbol) rectangle. Because the
+    inputs may be different adjustment regimes, a divergence here is *expected*
+    on dividend-paying names and is exactly the signal a swap would change.
+
+    Returns a structured report; ``status`` is one of ``ok`` (within tol),
+    ``divergent`` (some symbol exceeds tol), or ``no_overlap``.
+    """
+    a_close, b_close = a.close, b.close
+    common_cols = sorted(a_close.columns.intersection(b_close.columns))
+    common_idx = a_close.index.intersection(b_close.index)
+    report = {
+        "n_common_symbols": len(common_cols),
+        "n_common_dates": len(common_idx),
+        "only_in_a": sorted(set(a_close.columns) - set(b_close.columns)),
+        "only_in_b": sorted(set(b_close.columns) - set(a_close.columns)),
+        "adjustment_a": a.meta.get("adjustment"),
+        "adjustment_b": b.meta.get("adjustment"),
+        "adjustment_mismatch": a.meta.get("adjustment") != b.meta.get("adjustment"),
+        "tol": tol,
+    }
+    if len(common_idx) == 0 or len(common_cols) == 0:
+        report.update(status="no_overlap", divergent_symbols=[], max_rel_diff=None)
+        return report
+
+    x = a_close.loc[common_idx, common_cols]
+    y = b_close.loc[common_idx, common_cols]
+    rel = (x - y).abs() / (x.abs() + 1e-9)
+    per_symbol = rel.max().fillna(0.0)
+    divergent = sorted(per_symbol[per_symbol > tol].index)
+    report.update(
+        status="divergent" if divergent else "ok",
+        divergent_symbols=divergent,
+        max_rel_diff=float(per_symbol.max()),
+        median_rel_diff=float(per_symbol.median()),
+    )
+    return report
 
 
 class TastytradeProvider:
@@ -245,6 +310,7 @@ class TastytradeProvider:
         s = slice(pd.Timestamp(start), pd.Timestamp(end) if end else None)
         frames = {f: cached[f].loc[s] for f in FIELDS}
         return Panel(**frames, meta={"provider": "tastytrade",
+                                     "adjustment": ADJ_SPLIT_ONLY,
                                      "universe_file": str(self.universe_file)})
 
 
@@ -273,4 +339,4 @@ class SyntheticProvider:
         lo = pd.DataFrame(np.minimum(op.values, close.values) * np.exp(-np.abs(rng.normal(0, 0.005, close.shape))), index=idx, columns=cols)
         vol = pd.DataFrame(rng.lognormal(15.5, 0.6, close.shape), index=idx, columns=cols)
         return Panel(open=op, high=hi, low=lo, close=close, volume=vol,
-                     meta={"provider": "synthetic"})
+                     meta={"provider": "synthetic", "adjustment": ADJ_SYNTHETIC})

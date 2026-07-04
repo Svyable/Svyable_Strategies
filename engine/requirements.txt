@@ -5,3 +5,4 @@ streamlit>=1.36
 python-dotenv>=1.0
 tastytrade>=12.4,<13
 pandas>=2.1
+matplotlib>=3.8

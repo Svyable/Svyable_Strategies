@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from svyable.dashboard_service import DashboardService
-from svyable.dashboard_ui import percent
+from svyable.dashboard_ui import percent, short_hash
 
 
 def render_strategy(service: DashboardService) -> None:
@@ -16,13 +16,26 @@ def render_strategy(service: DashboardService) -> None:
     meta, weights = snapshot["meta"], snapshot["weights"].copy()
     budget, pnl = snapshot["budget"], snapshot["pnl"]
     st.caption(f"Latest artifact directory: `{snapshot['run_dir']}`")
+    config_hash = meta.get("config_hash", "—")
     cols = st.columns(5)
-    cols[0].metric("Config", meta.get("config_hash", "—"))
-    cols[1].metric("Data status", (meta.get("data") or {}).get("status", "—"))
+    cols[0].metric(
+        "Config",
+        short_hash(config_hash),
+        help=f"Configuration hash pinning this run's parameters.\n\nFull: {config_hash}",
+    )
+    cols[1].metric(
+        "Data status",
+        (meta.get("data") or {}).get("status", "—"),
+        help="Freshness/validation status of the price data used for this run.",
+    )
     cols[2].metric("Data date", (meta.get("data") or {}).get("last_date", "—"))
-    cols[3].metric("Positions", len(weights))
+    cols[3].metric("Positions", len(weights), help="Number of names in the target portfolio.")
     gross = float(budget.iloc[-1, 0]) if not budget.empty else None
-    cols[4].metric("Gross budget", f"{gross:.2f}x" if gross else "—")
+    cols[4].metric(
+        "Gross budget",
+        f"{gross:.2f}x" if gross else "—",
+        help="Gross exposure budget (leverage multiplier) after risk throttling.",
+    )
 
     if not weights.empty:
         column = "weight" if "weight" in weights.columns else weights.columns[0]

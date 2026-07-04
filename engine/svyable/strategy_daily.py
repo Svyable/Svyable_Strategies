@@ -218,6 +218,8 @@ def run(args) -> int:
                 "candidate_count": len(selection.board) - 1,
                 "shadow_nav": shadow_nav,
                 "awaiting_agent": awaiting_agent,
+                "provider": panel.meta.get("provider"),
+                "adjustment": panel.meta.get("adjustment"),
             },
             output_dir=str(canonical_output or selection.board_dir),
         )

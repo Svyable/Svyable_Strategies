@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+import matplotlib.pyplot as plt
 import streamlit as st
+from matplotlib.figure import Figure
 
 from svyable.broker_settings import TastySettings
+
+
+def render_figure(fig: Figure) -> None:
+    """Render a matplotlib figure full-width and close it.
+
+    Closing after render keeps Streamlit reruns from leaking pyplot figures — the
+    single place every dashboard view routes matplotlib output through.
+    """
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
 
 
 def money(value: object) -> str:
@@ -19,6 +31,47 @@ def percent(value: object) -> str:
         return f"{float(value):.1%}"
     except (TypeError, ValueError):
         return "—"
+
+
+def short_hash(value: object, keep: int = 8) -> str:
+    """Truncate a long hash for a metric card, e.g. ``84d90231…`` (full in tooltip)."""
+    text = str(value or "").strip()
+    if not text or text == "—":
+        return "—"
+    return f"{text[:keep]}…" if len(text) > keep else text
+
+
+def broker_ready(settings: TastySettings) -> bool:
+    """True when the credentials needed for a live broker session are all present.
+
+    Mirrors what ``TastySettings.from_env(require_credentials=True)`` demands, so the
+    UI can gate the Broker/Rebalance tabs *before* they raise a raw ValueError.
+    """
+    return bool(
+        settings.refresh_token and settings.account_number and settings.client_secret
+    )
+
+
+def render_broker_gate(settings: TastySettings) -> bool:
+    """Return True if the broker is usable; otherwise render guidance and return False."""
+    if broker_ready(settings):
+        return True
+    missing_token = not settings.refresh_token
+    st.info(
+        "🔌 **Broker not connected.** "
+        + (
+            "No Tastytrade refresh token is configured yet, so live account data and "
+            "order controls are unavailable."
+            if missing_token
+            else "Broker credentials are incomplete (client secret or account number)."
+        )
+    )
+    if missing_token:
+        st.caption(
+            "Connect it from the **sidebar → Broker authorization → Authorize Tastytrade**. "
+            "The Overview, Strategy, and Audit tabs read local artifacts and work without it."
+        )
+    return False
 
 
 def submission_confirmation(

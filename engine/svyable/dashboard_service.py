@@ -88,6 +88,9 @@ class DashboardService(ExecutionBackfillMixin, ExecutionControlMixin):
                 "meta": {},
                 "report": "",
                 "factor_weights": {},
+                "factor_health": {},
+                "sleeve_health": pd.DataFrame(),
+                "factor_catalog": pd.DataFrame(),
             }
 
         meta_path = run_dir / "meta.json"
@@ -95,6 +98,10 @@ class DashboardService(ExecutionBackfillMixin, ExecutionControlMixin):
         factor_weights = {
             path.stem.removeprefix("factor_weights_"): self._read_frame(path)
             for path in sorted(run_dir.glob("factor_weights_*.csv"))
+        }
+        factor_health = {
+            path.stem.removeprefix("factor_health_"): self._read_frame(path)
+            for path in sorted(run_dir.glob("factor_health_*.csv"))
         }
         return {
             "run_dir": run_dir,
@@ -110,6 +117,9 @@ class DashboardService(ExecutionBackfillMixin, ExecutionControlMixin):
             if (run_dir / "morning_report.md").exists()
             else "",
             "factor_weights": factor_weights,
+            "factor_health": factor_health,
+            "sleeve_health": self._read_frame(run_dir / "sleeve_health.csv"),
+            "factor_catalog": self._read_frame(run_dir / "factor_catalog.csv"),
         }
 
     def ledger_snapshot(self) -> dict[str, Any]:

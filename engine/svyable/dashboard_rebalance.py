@@ -7,10 +7,12 @@ import streamlit as st
 
 from svyable.broker_settings import TastySettings
 from svyable.dashboard_service import DashboardService
-from svyable.dashboard_ui import money, submission_confirmation
+from svyable.dashboard_ui import money, render_broker_gate, submission_confirmation
 
 
 def render_rebalance(service: DashboardService, settings: TastySettings) -> None:
+    if not render_broker_gate(settings):
+        return
     st.caption(
         "The planner uses persisted daily prices, dollar ADV, and the liquidity mask, "
         "then refreshes execution prices from Tastytrade."
@@ -33,12 +35,28 @@ def render_rebalance(service: DashboardService, settings: TastySettings) -> None
         return
 
     cols = st.columns(6)
-    cols[0].metric("Orders", len(plan["orders"]))
-    cols[1].metric("ADV capped", plan["adv_capped_orders"])
-    cols[2].metric("Estimated turnover", money(plan["estimated_turnover"]))
+    cols[0].metric("Orders", len(plan["orders"]), help="Number of orders in the plan.")
+    cols[1].metric(
+        "ADV capped",
+        plan["adv_capped_orders"],
+        help="Orders whose size was reduced to respect the ADV participation cap.",
+    )
+    cols[2].metric(
+        "Estimated turnover",
+        money(plan["estimated_turnover"]),
+        help="Total notional bought and sold if the plan is executed.",
+    )
     cols[3].metric("Account equity", money(plan["account"].get("equity")))
-    cols[4].metric("Input date", plan["execution_inputs_date"] or "missing")
-    cols[5].metric("Safety", "PASS" if plan["safety_complete"] else "BLOCKED")
+    cols[4].metric(
+        "Input date",
+        plan["execution_inputs_date"] or "missing",
+        help="Date of the strategy inputs used; should match the expected date below.",
+    )
+    cols[5].metric(
+        "Safety",
+        "PASS" if plan["safety_complete"] else "BLOCKED",
+        help="Whether all safety preconditions for broker preflight are satisfied.",
+    )
     st.caption(
         f"ADV window: {plan['adv_window']} trading days | "
         f"participation cap: {plan['adv_participation_cap']:.1%} | "

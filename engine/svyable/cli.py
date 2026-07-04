@@ -124,7 +124,9 @@ def cmd_daily(args) -> int:
         data_status=report["status"],
         metrics={"budget": float(res.budget.iloc[-1]),
                  "positions": int((res.weights.iloc[-1] > 0).sum()),
-                 "shadow_nav": shadow_nav},
+                 "shadow_nav": shadow_nav,
+                 "provider": panel.meta.get("provider"),
+                 "adjustment": panel.meta.get("adjustment")},
         output_dir=str(res.output_dir))
 
     print(f"weights written: {res.output_dir}")
