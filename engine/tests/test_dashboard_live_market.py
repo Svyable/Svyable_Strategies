@@ -68,6 +68,7 @@ def test_market_table_combines_targets_positions_and_quotes():
     table = _market_table(_FakeService(), snapshot, max_symbols=10)
 
     assert set(table["symbol"]) == {"AAPL", "MSFT", "TSLA"}
+    assert {"target_w", "broker_qty", "spread_bps", "delta_notional", "quote_ok"} <= set(table.columns)
     indexed = table.set_index("symbol")
     aapl = indexed.loc["AAPL"]
     assert bool(aapl["quote_ok"]) is True
