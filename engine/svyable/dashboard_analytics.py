@@ -19,6 +19,7 @@ from svyable.dashboard_data import clean_returns, clean_timeseries, numeric_time
 from svyable.dashboard_service import DashboardService
 from svyable.dashboard_stack import render_position_stack
 from svyable.dashboard_ui import percent, render_figure
+from svyable.factor_health_tools import factor_review_summary, factor_trend_alerts
 from svyable.metrics import ANN, deflated_sharpe, perf_summary
 from svyable.portfolio_arcana import market_model
 
@@ -74,6 +75,33 @@ def _render_arcana_section(pnl: pd.DataFrame, returns: pd.Series, snapshot: dict
 
     ic = snapshot.get("ic_health", pd.DataFrame())
     if not ic.empty:
+        st.markdown("**Factor trend alerts**")
+        alerts = factor_trend_alerts(ic)
+        summary_row = factor_review_summary(alerts, pd.DataFrame())
+        cols = st.columns(5)
+        cols[0].metric("Factor review", summary_row["headline"])
+        cols[1].metric("Deteriorating", summary_row["deteriorating"])
+        cols[2].metric("Watch", summary_row["watch"])
+        cols[3].metric("Improving", summary_row["improving"])
+        cols[4].metric("IC series", len(alerts))
+        if alerts.empty:
+            st.info("Not enough factor IC history for trend alerts yet.")
+        else:
+            display = alerts.head(25).copy()
+            st.dataframe(
+                display.style.format(
+                    {
+                        "latest_ic": "{:.4f}",
+                        "short_ic": "{:.4f}",
+                        "long_ic": "{:.4f}",
+                        "ic_delta": "{:.4f}",
+                        "slope": "{:.6f}",
+                    }
+                ).background_gradient(subset=["latest_ic", "ic_delta"], cmap="RdYlGn"),
+                use_container_width=True,
+                hide_index=True,
+            )
+
         st.markdown("**Current factor health context**")
         latest = ic.iloc[-1].sort_values(ascending=False).rename("smoothed_ic")
         st.dataframe(latest.to_frame().head(20), use_container_width=True)
