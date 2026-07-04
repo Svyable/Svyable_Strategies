@@ -19,6 +19,18 @@ from svyable.dashboard_ui import percent, render_figure
 from svyable.metrics import perf_summary
 
 ANN = 252.0
+_PCT_COLS = [
+    "ann_return",
+    "ann_vol",
+    "hit_rate",
+    "worst_day",
+    "cvar_5",
+    "max_dd",
+    "stress_mean",
+    "stress_hit_rate",
+    "calm_mean",
+    "red_green_spread",
+]
 
 
 def _drawdown(returns: pd.Series) -> pd.Series:
@@ -91,27 +103,20 @@ def _stress_matrix(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _format_stress(frame: pd.DataFrame) -> pd.DataFrame:
-    display = frame.copy()
-    pct_cols = [
-        "ann_return",
-        "ann_vol",
-        "hit_rate",
-        "worst_day",
-        "cvar_5",
-        "max_dd",
-        "stress_mean",
-        "stress_hit_rate",
-        "calm_mean",
-        "red_green_spread",
-    ]
-    for col in pct_cols:
-        if col in display.columns:
-            display[col] = display[col].map(lambda value: f"{value:.2%}" if pd.notna(value) else "—")
-    for col in ["sharpe"]:
-        if col in display.columns:
-            display[col] = display[col].map(lambda value: f"{value:.2f}" if pd.notna(value) else "—")
-    return display
+def _stress_styler(frame: pd.DataFrame):
+    formatters = {col: "{:.2%}" for col in _PCT_COLS if col in frame.columns}
+    if "sharpe" in frame.columns:
+        formatters["sharpe"] = "{:.2f}"
+    if "max_underwater_days" in frame.columns:
+        formatters["max_underwater_days"] = "{:.0f}"
+    return frame.style.format(formatters, na_rep="—").background_gradient(
+        subset=[
+            col
+            for col in ["stress_mean", "stress_hit_rate", "max_dd", "cvar_5", "calm_mean"]
+            if col in frame.columns
+        ],
+        cmap="RdYlGn",
+    )
 
 
 def _blend_returns(frame: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
@@ -169,19 +174,9 @@ def render_stress_lab(
             "Stress days are the worst 10% of the cross-candidate return proxy. Calm days are the best 10%."
         )
         try:
-            st.dataframe(
-                _format_stress(stress).style.background_gradient(
-                    subset=[
-                        col
-                        for col in ["stress_mean", "stress_hit_rate", "max_dd", "cvar_5", "calm_mean"]
-                        if col in stress.columns
-                    ],
-                    cmap="RdYlGn",
-                ),
-                use_container_width=True,
-            )
+            st.dataframe(_stress_styler(stress), use_container_width=True)
         except Exception:
-            st.dataframe(_format_stress(stress), use_container_width=True)
+            st.dataframe(stress, use_container_width=True)
 
         left, right = st.columns(2)
         with left:
