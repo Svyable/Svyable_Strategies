@@ -43,11 +43,18 @@ def _execution_gate(service: DashboardService) -> dict[str, str]:
     return _gate("Execution inputs", _PASS, f"fresh artifact {artifact}", "daily pipeline")
 
 
+def _frame_column(frame: pd.DataFrame, column: str, default: object = None) -> pd.Series:
+    if column in frame.columns:
+        return frame[column]
+    return pd.Series(default, index=frame.index)
+
+
 def _quote_gate(market_frame: pd.DataFrame | None) -> dict[str, str]:
     if market_frame is None or market_frame.empty:
         return _gate("Live quotes", _WARN, "quote board not loaded yet", "broker")
-    missing = int((~market_frame.get("quote_ok", pd.Series(False, index=market_frame.index)).astype(bool)).sum())
-    spreads = pd.to_numeric(market_frame.get("spread_bps"), errors="coerce")
+    quote_ok = _frame_column(market_frame, "quote_ok", False).astype(bool)
+    missing = int((~quote_ok).sum())
+    spreads = pd.to_numeric(_frame_column(market_frame, "spread_bps"), errors="coerce")
     wide = int((spreads.dropna() > 25.0).sum())
     if missing:
         return _gate("Live quotes", _BLOCK, f"{missing} symbols missing live quotes", "broker")
@@ -79,9 +86,9 @@ def build_readiness_snapshot(
 
     gates.append(
         _gate(
-            "Broker credentials",
+            "Broker configuration",
             _PASS if broker_ready(settings) else _BLOCK,
-            "configured" if broker_ready(settings) else "missing Tastytrade refresh token, account, or client secret",
+            "configured" if broker_ready(settings) else "missing required broker environment variables",
             "broker",
         )
     )
