@@ -53,6 +53,25 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     return default if pd.isna(number) else number
 
 
+def _side_hint(delta_notional: float | None, threshold: float = 50.0) -> str:
+    if delta_notional is None or abs(delta_notional) < threshold:
+        return "HOLD"
+    return "BUY" if delta_notional > 0 else "SELL"
+
+
+def _agent_note(*, quote_ok: bool, spread_bps: float | None, delta_notional: float | None) -> str:
+    side = _side_hint(delta_notional)
+    if not quote_ok:
+        return "BLOCK: missing live quote"
+    if spread_bps is not None and spread_bps > 50.0:
+        return f"CAUTION: {side}, very wide spread"
+    if spread_bps is not None and spread_bps > 25.0:
+        return f"WATCH: {side}, wide spread"
+    if side == "HOLD":
+        return "OK: near target"
+    return f"OK: {side} candidate"
+
+
 def _market_table(
     service: DashboardService,
     snapshot: dict[str, Any] | None,
@@ -110,6 +129,7 @@ def _market_table(
             if target_notional is not None and current_notional is not None
             else None
         )
+        quote_ok = bool(price)
         rows.append(
             {
                 "symbol": symbol,
@@ -124,8 +144,12 @@ def _market_table(
                 "target_notional": target_notional,
                 "current_notional": current_notional,
                 "delta_notional": delta_notional,
+                "trade_side_hint": _side_hint(delta_notional),
+                "quote_flag": "OK" if quote_ok else "MISSING",
+                "spread_flag": "WIDE" if spread_bps is not None and spread_bps > 25.0 else "OK",
+                "agent_note": _agent_note(quote_ok=quote_ok, spread_bps=spread_bps, delta_notional=delta_notional),
                 "updated_at": row.get("updated_at"),
-                "quote_ok": bool(price),
+                "quote_ok": quote_ok,
             }
         )
 
@@ -225,6 +249,10 @@ def render_live_market_monitor(
         "spread_bps",
         "change_pct",
         "delta_notional",
+        "trade_side_hint",
+        "quote_flag",
+        "spread_flag",
+        "agent_note",
         "volume",
         "updated_at",
     ]
