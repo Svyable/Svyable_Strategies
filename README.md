@@ -17,6 +17,7 @@ Implemented:
 - Portfolio Arcana analytics for market-model residual alpha, idiosyncratic volatility, idio information ratio, factor exposures, and symbol-level residual contributors.
 - Agent PM context-pack harness that converts the immutable candidate board into `agent_context.json`, `agent_pm_memo.md`, and a hash-matched decision template while forbidding same-cycle repo self-modification.
 - Visible meta harness: regime proxy, PASS/WARN/BLOCK decision tree, score decomposition, deterministic weight provenance, counterfactual alternatives, and decision readiness.
+- Pre-activation decision guard that validates `agent_decision.json` against the latest context, allowed candidates, hash, confidence, reason, and artifact readiness before activation.
 - Purged causal IC weighting with uncertainty, hit-rate, coverage, and redundancy controls.
 - Complete strategy registry: every strategy owns factors, construction, concentration, risk, cost, cadence, and maturity.
 - Svyable Frontier Price Action strategy candidate built from channel pressure, compression thrust, gap continuation, range participation, and range rejection plus institutional trend and resilience controls.
@@ -84,20 +85,21 @@ flowchart TB
         EXPLAIN["selection_explain.py\ncounterfactual alternatives"]
         HARNESS["agent_pm_harness.py\ncontext pack + rails"]
         DECISION["agent_decision.json\none allowed candidate_id"]
+        GUARD["agent_decision_guard.py\npre-activation PASS/BLOCK"]
         ACT["strategy_activate.py\none canonical portfolio"]
         DAILY --> BOARD --> META --> HARNESS
         BOARD --> EXPLAIN --> HARNESS
-        HARNESS --> DECISION --> ACT
+        HARNESS --> DECISION --> GUARD --> ACT
     end
 
     subgraph OPS["6 · Operations + audit"]
         CMD["PM Command Center\nreadiness + ledger"]
         PORT["Portfolio Ops\ndrift + quote board"]
         REB["rebalancer.py\nplan + reconcile"]
-        GUARD["execution_control.py\npreflight + rails"]
+        GUARDOPS["execution_control.py\npreflight + rails"]
         ADAPT["adapter layer\nsandbox-first"]
         LED["ledger.py\naudit trail"]
-        ACT --> CMD --> PORT --> REB --> GUARD --> ADAPT --> LED
+        ACT --> CMD --> PORT --> REB --> GUARDOPS --> ADAPT --> LED
     end
 
     PANEL --> FLIB --> ENS
@@ -111,6 +113,7 @@ sequenceDiagram
     participant Repo as Svyable repo/runtime
     participant Human as Human PM
     participant Agent as Agent PM
+    participant Guard as Decision Guard
     participant Ops as Portfolio Ops
     participant Adapter as Adapter layer
 
@@ -120,8 +123,9 @@ sequenceDiagram
     Repo->>Human: show Selection Meta Harness GUI
     Human->>Agent: review allowed candidates, trace, counterfactuals, readiness
     Agent->>Repo: write hash-matched agent_decision.json only
-    Repo->>Repo: validate date, hash, candidate_id, eligibility
-    Repo->>Ops: activate canonical weights_today.csv
+    Repo->>Guard: validate date, hash, allowed candidate, readiness, reason
+    Guard->>Repo: PASS or BLOCK report
+    Repo->>Ops: activate canonical weights_today.csv only after PASS
     Ops->>Human: show drift, quotes, stale inputs, readiness, preflight
     Human->>Ops: approve sandbox workflow or manual action
     Ops->>Adapter: pass only validated artifacts through rails
@@ -138,7 +142,7 @@ flowchart LR
     end
 
     subgraph DAILY["Daily PM loop"]
-        BOARD["Candidate board"] --> PACK["Context pack"] --> CHOICE["Decision artifact"] --> CANON["Canonical weights"] --> PLAN["Operating plan"]
+        BOARD["Candidate board"] --> PACK["Context pack"] --> CHOICE["Decision artifact"] --> GUARD["Decision guard"] --> CANON["Canonical weights"] --> PLAN["Operating plan"]
     end
 
     MAIN -. "future run" .-> BOARD
@@ -155,7 +159,8 @@ Same-cycle repository self-improvement is forbidden. The daily loop must operate
 | `agent_context.json` | `agent_pm_harness.py` | agent / GUI | Machine-readable board, rails, trace, readiness |
 | `agent_pm_memo.md` | `agent_pm_harness.py` | human PM | Human-readable decision memo |
 | `agent_decision_template.json` | `agent_pm_harness.py` | agent / human | Legal output schema |
-| `agent_decision.json` | agent / human | `strategy_activation.py` | Hash-matched candidate choice |
+| `agent_decision.json` | agent / human | guard + activation | Hash-matched candidate choice |
+| `latest_agent_decision_guard.json` | `agent_decision_guard.py` | human / automation | PASS/BLOCK validation report |
 | `weights_today.csv` | activation / pipeline | Portfolio Ops | Canonical target weights |
 | `execution_inputs.csv` | pipeline | rebalancer / preflight | Prices, ADV, liquidity flags |
 | `ledger.db` | ops layers | dashboards / audit | Runs, warnings, actions, fills, drift |
@@ -179,6 +184,7 @@ python -m pip install -e '.[all,dev]'
 ```bash
 python -m svyable.strategy_daily --evaluate-only
 python -m svyable.agent_pm_harness --out outputs
+python -m svyable.agent_decision_guard --out outputs --write
 python -m svyable.strategy_activate --out outputs
 ```
 
@@ -187,6 +193,7 @@ Installed script equivalents:
 ```bash
 svyable-strategy-daily --evaluate-only
 svyable-agent-pack --out outputs
+svyable-agent-guard --out outputs --write
 svyable-strategy-activate --out outputs
 ```
 
@@ -197,8 +204,9 @@ svyable-strategy-activate --out outputs
 3. Confirm decision readiness is `PASS`.
 4. Review visible regime proxy, decision tree, blocked candidates, counterfactual alternatives, and deterministic weight provenance.
 5. Approve or write `strategy_selection/agent_decision.json` using only an allowed `candidate_id` and matching hash.
-6. Activate canonical weights.
-7. Use Portfolio Ops for quote sanity, drift review, preflight, sandbox workflow, reconciliation, and audit.
+6. Run the decision guard and resolve any `BLOCK` report before activation.
+7. Activate canonical weights.
+8. Use Portfolio Ops for quote sanity, drift review, preflight, sandbox workflow, reconciliation, and audit.
 
 ## Repository map
 
@@ -208,10 +216,10 @@ svyable-strategy-activate --out outputs
 | Factors | `factor_library.py`, `factor_institutional.py`, `factor_price_action_frontier.py`, `factor_health_tools.py` |
 | Portfolio intelligence | `portfolio_arcana.py`, `selection_explain.py`, `agent_meta_trace.py` |
 | Strategy frontier | `strategy_registry.py`, `strategy_blend.py`, `strategy_daily.py`, `strategy_selector.py` |
-| Agent PM harness | `agent_pm_harness.py`, `strategy_activate.py`, `dashboard_agent_intel.py`, `pages/8_Agent_Meta_Harness.py` |
+| Agent PM harness | `agent_pm_harness.py`, `agent_decision_guard.py`, `strategy_activate.py`, `dashboard_agent_intel.py`, `pages/8_Agent_Meta_Harness.py` |
 | Operations | `dashboard_command_center.py`, `dashboard_portfolio_ops.py`, `dashboard_readiness.py`, `dashboard_live_market.py` |
 | Execution/audit | `rebalancer.py`, `execution_control.py`, `submission_guard.py`, adapter modules, `ledger.py` |
-| Tests | `engine/tests/test_agent_pm_harness.py`, `test_agent_meta_trace.py`, `test_selection_explain.py`, factor/strategy/readiness tests |
+| Tests | `engine/tests/test_agent_pm_harness.py`, `test_agent_meta_trace.py`, `test_selection_explain.py`, `test_agent_decision_guard.py`, factor/strategy/readiness tests |
 
 ## Safety and truthfulness
 
