@@ -211,7 +211,7 @@ def render_live_market_monitor(
     cols[1].metric("Missing quotes", missing)
     cols[2].metric("Avg spread", f"{avg_spread:.1f} bps" if pd.notna(avg_spread) else "—")
     cols[3].metric("Wide spreads", wide_count, help="Symbols with quoted spread wider than 25 bps.")
-    cols[4].metric("Gross drift notional", money(abs(float(gross_delta))) if gross_delta else "—")
+    cols[4].metric("Gross drift notional", money(gross_delta) if gross_delta else "—")
     st.caption(f"Quote board loaded {cached['loaded_at']} local time.")
 
     columns = [
