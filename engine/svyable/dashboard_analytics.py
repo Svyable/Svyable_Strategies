@@ -20,6 +20,7 @@ from svyable.dashboard_service import DashboardService
 from svyable.dashboard_stack import render_position_stack
 from svyable.dashboard_ui import percent, render_figure
 from svyable.metrics import ANN, deflated_sharpe, perf_summary
+from svyable.portfolio_arcana import market_model
 
 _MIN_DAYS = 20
 
@@ -37,6 +38,45 @@ def _period_return(returns: pd.Series, start: pd.Timestamp) -> float:
     if window.empty:
         return float("nan")
     return float((1.0 + window).prod() - 1.0)
+
+
+def _render_arcana_section(pnl: pd.DataFrame, returns: pd.Series, snapshot: dict) -> None:
+    st.caption(
+        "Arcana lens: separates market exposure from residual return so any book can be judged "
+        "by idiosyncratic alpha, residual volatility, and residual hit rate rather than headline PnL alone."
+    )
+    diag = clean_timeseries(pnl)
+    benchmark = pd.Series(dtype=float)
+    if "benchmark_ret" in diag.columns:
+        benchmark = pd.to_numeric(diag["benchmark_ret"], errors="coerce")
+    if benchmark.empty or benchmark.dropna().empty:
+        st.info("No benchmark return column is available yet for market-model residual analysis.")
+        return
+
+    summary, residual = market_model(returns, benchmark)
+    if summary.get("status") != "ok":
+        st.info(f"Arcana needs more aligned return history. Current days: {summary.get('days', 0)}.")
+        return
+
+    cols = st.columns(6)
+    cols[0].metric("Market beta", f"{summary['beta']:.2f}")
+    cols[1].metric("Ann. residual alpha", percent(summary["ann_residual_alpha"]))
+    cols[2].metric("Idio vol", percent(summary["ann_idio_vol"]))
+    cols[3].metric("Idio IR", f"{summary['idio_information_ratio']:.2f}")
+    cols[4].metric("Market R²", percent(summary["r2_market"]))
+    cols[5].metric("Residual hit rate", percent(summary["residual_hit_rate"]))
+
+    if not residual.empty:
+        st.markdown("**Residual return stream**")
+        render_figure(charts.cumulative_return_chart(residual, title="Beta-adjusted residual return"))
+        rolling = residual.rolling(63, min_periods=32).mean() * ANN
+        st.line_chart(rolling.rename("rolling_ann_residual_alpha_63d"))
+
+    ic = snapshot.get("ic_health", pd.DataFrame())
+    if not ic.empty:
+        st.markdown("**Current factor health context**")
+        latest = ic.iloc[-1].sort_values(ascending=False).rename("smoothed_ic")
+        st.dataframe(latest.to_frame().head(20), use_container_width=True)
 
 
 def _render_weights_section(weights_history: pd.DataFrame) -> None:
@@ -157,8 +197,8 @@ def render_analytics(service: DashboardService) -> None:
     second[4].metric("Best day", percent(summary.get("best_day")))
     second[5].metric("Worst day", percent(summary.get("worst_day")))
 
-    perf_tab, risk_tab, calendar_tab, weights_tab, stack_tab, factor_tab = st.tabs(
-        ["📈 Performance", "🛡️ Risk", "🗓️ Temporal heatmaps", "🟢🔴 Long / short", "🧱 Stack", "🔬 Distribution & IC"]
+    perf_tab, risk_tab, calendar_tab, arcana_tab, weights_tab, stack_tab, factor_tab = st.tabs(
+        ["📈 Performance", "🛡️ Risk", "🗓️ Temporal heatmaps", "🧠 Arcana", "🟢🔴 Long / short", "🧱 Stack", "🔬 Distribution & IC"]
     )
 
     with perf_tab:
@@ -201,6 +241,9 @@ def render_analytics(service: DashboardService) -> None:
         render_figure(charts.monthly_returns_heatmap(returns))
         render_figure(charts.weekday_month_heatmap(returns))
         render_figure(charts.calendar_heatmap(returns))
+
+    with arcana_tab:
+        _render_arcana_section(pnl, returns, snapshot)
 
     with weights_tab:
         _render_weights_section(snapshot["weights_history"])
