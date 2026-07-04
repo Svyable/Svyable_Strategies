@@ -83,3 +83,4 @@ def register_price_action_frontier() -> None:
 
 
 register_price_action_frontier()
+from svyable import strategy_price_action_frontier as _strategy_price_action_frontier  # noqa: F401,E402
