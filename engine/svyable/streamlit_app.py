@@ -1,4 +1,4 @@
-"""Interactive Svyable Tastytrade operations console."""
+"""Interactive Svyable Tastytrade and agentic strategy operations console."""
 
 from __future__ import annotations
 
@@ -13,13 +13,12 @@ from svyable.dashboard_agent import render_agent
 from svyable.dashboard_analytics import render_analytics
 from svyable.dashboard_audit import render_audit
 from svyable.dashboard_auth import render_auth_controls
-from svyable.dashboard_broker_view import render_broker
+from svyable.dashboard_command_center import render_command_center
 from svyable.dashboard_factors import render_factors
-from svyable.dashboard_overview import render_overview
-from svyable.dashboard_rebalance import render_rebalance
+from svyable.dashboard_portfolio_ops import render_portfolio_ops
 from svyable.dashboard_service import DashboardService
-from svyable.dashboard_strategy import render_strategy
 from svyable.dashboard_ui import broker_ready
+from svyable.strategy_selection_service import StrategySelectionService
 
 
 def configured_output_root(settings: TastySettings) -> str:
@@ -37,12 +36,12 @@ def service_for(output_root: str) -> DashboardService:
 
 def render() -> None:
     st.set_page_config(
-        page_title="Svyable Tastytrade Operations",
-        page_icon="📈",
+        page_title="Svyable PM Command Center",
+        page_icon="🧠",
         layout="wide",
         menu_items={
             "about": (
-                "Svyable Tastytrade operations console. Sandbox is the safe default; "
+                "Svyable agentic portfolio and Tastytrade operations console. Sandbox is the safe default; "
                 "production is observation-first with gated submission."
             )
         },
@@ -50,15 +49,16 @@ def render() -> None:
     settings = TastySettings.from_env(require_credentials=False)
     output_root = configured_output_root(settings)
     service = service_for(output_root)
+    strategy_service = StrategySelectionService(output_root)
     connected = broker_ready(settings)
+    frontier = strategy_service.frontier_status()
 
-    st.title("Svyable Tastytrade Operations")
+    st.title("Svyable PM Command Center")
     if settings.is_test:
         st.success("SANDBOX / TEST MODE — broker submissions use the sandbox session.")
     else:
         st.error("PRODUCTION / REAL ACCOUNT — observation is available; submission is gated.")
 
-    # Glanceable status strip so state is obvious before opening any tab.
     number = settings.account_number
     masked = f"…{number[-4:]}" if number else "not configured"
     st.caption(
@@ -66,7 +66,10 @@ def render() -> None:
         f"  ·  🔌 Broker: {'connected' if connected else 'not connected'}"
         f"  ·  🏦 Account {masked}"
         f"  ·  🚦 Live submission: {'ON' if settings.live_enabled else 'off'}"
+        f"  ·  🎯 Board: {frontier['board_candidate_count']}/{frontier['expected_candidate_count']} candidates"
     )
+    if frontier["is_incomplete_latest_board"]:
+        st.warning(frontier["explanation"])
 
     with st.sidebar:
         st.header("Runtime")
@@ -82,6 +85,12 @@ def render() -> None:
             "Enabled" if settings.live_enabled else "Disabled",
             help="Hard safety gate. Even when enabled, live orders require typed confirmation.",
         )
+        st.metric(
+            "Frontier coverage",
+            f"{frontier['board_candidate_count']}/{frontier['expected_candidate_count']}",
+            help="Latest candidate-board rows versus the current strategy-selection policy frontier.",
+        )
+        st.metric("Registered strategies", frontier["registry_strategy_count"])
         st.caption(f"Output root: `{output_root}`")
         if st.button("Clear dashboard cache", use_container_width=True):
             st.cache_resource.clear()
@@ -94,31 +103,25 @@ def render() -> None:
 
     tabs = st.tabs(
         [
-            "📊 Overview",
-            "🎯 Strategy",
-            "🤖 Agent",
+            "🧠 Command Center",
+            "🤖 Agent Lab",
             "📈 Analytics",
             "🧬 Factors",
-            "🏦 Broker",
-            "⚖️ Rebalance",
+            "🏦 Portfolio Ops",
             "🧾 Audit",
         ]
     )
     with tabs[0]:
-        render_overview(service)
+        render_command_center(service, strategy_service, settings, output_root)
     with tabs[1]:
-        render_strategy(service)
-    with tabs[2]:
         render_agent(output_root)
-    with tabs[3]:
+    with tabs[2]:
         render_analytics(service)
-    with tabs[4]:
+    with tabs[3]:
         render_factors(service)
+    with tabs[4]:
+        render_portfolio_ops(service, settings)
     with tabs[5]:
-        render_broker(service, settings)
-    with tabs[6]:
-        render_rebalance(service, settings)
-    with tabs[7]:
         render_audit(service)
 
 
