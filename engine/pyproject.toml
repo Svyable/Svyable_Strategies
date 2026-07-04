@@ -1,7 +1,7 @@
 [project]
 name = "svyable-engine"
 version = "0.1.0"
-description = "Svyable: vendor-agnostic daily cross-sectional alpha engine (NASDAQ long-only flagship)"
+description = "Svyable: vendor-agnostic daily cross-sectional alpha engine and agentic PM harness"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
@@ -13,11 +13,27 @@ dependencies = [
 data = ["yfinance>=0.2.40", "websocket-client>=1.7", "requests>=2.31"]
 ml = ["scikit-learn>=1.4"]
 hrp = ["scipy>=1.11"]
-all = ["yfinance>=0.2.40", "websocket-client>=1.7", "requests>=2.31",
-       "scikit-learn>=1.4", "scipy>=1.11"]
+gui = ["streamlit>=1.36", "matplotlib>=3.8", "watchdog>=4.0"]
+broker = ["tastytrade>=12.4,<13", "python-dotenv>=1.0"]
+dev = ["pytest>=8.0"]
+all = [
+    "yfinance>=0.2.40",
+    "websocket-client>=1.7",
+    "requests>=2.31",
+    "scikit-learn>=1.4",
+    "scipy>=1.11",
+    "streamlit>=1.36",
+    "matplotlib>=3.8",
+    "watchdog>=4.0",
+    "tastytrade>=12.4,<13",
+    "python-dotenv>=1.0",
+]
 
 [project.scripts]
 svyable = "svyable.cli:main"
+svyable-strategy-daily = "svyable.strategy_daily:main"
+svyable-agent-pack = "svyable.agent_pm_harness:main"
+svyable-strategy-activate = "svyable.strategy_activate:main"
 
 [build-system]
 requires = ["setuptools>=68"]
