@@ -2,9 +2,9 @@
 
 The goal of this page is to make the default `streamlit` launch feel like the PM's
 morning cockpit: agent state, strategy artifact freshness, full-frontier coverage,
-Tastytrade account/position state, live quote sanity checks, and the next safe
-operating actions on one screen. Deeper research and order submission still live
-behind the dedicated tabs.
+Tastytrade account/position state, live quote sanity checks, PM readiness gates,
+and the next safe operating actions on one screen. Deeper research and order
+submission still live behind the dedicated tabs.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from svyable.broker_settings import TastySettings
 from svyable.dashboard_data import clean_returns
 from svyable.dashboard_live_market import render_live_market_monitor
 from svyable.dashboard_positions import render_target_vs_actual
+from svyable.dashboard_readiness import render_readiness_panel
 from svyable.dashboard_service import DashboardService
 from svyable.dashboard_ui import broker_ready, money, percent, render_figure, short_hash
 from svyable.strategy_selection_service import StrategySelectionService
@@ -220,7 +221,7 @@ def render_command_center(
     st.subheader("🧠 Agentic portfolio command center")
     st.caption(
         "One-screen operating view: strategy artifacts, candidate frontier, live Tastytrade account/quote state, "
-        "and the next safe PM actions. Research and execution details are one tab away."
+        "agent readiness gates, and the next safe PM actions. Research and execution details are one tab away."
     )
 
     ledger = _safe_ledger_snapshot(service)
@@ -246,6 +247,7 @@ def render_command_center(
     st.divider()
     st.subheader("Tastytrade account state")
     broker_snapshot = _broker_snapshot_card(service, settings)
+    market_frame = pd.DataFrame()
     if broker_snapshot is not None:
         positions = broker_snapshot.get("positions", pd.DataFrame())
         account = broker_snapshot.get("account", {})
@@ -261,13 +263,24 @@ def render_command_center(
                     float(account.get("equity")) if account.get("equity") else None,
                 )
         with st.expander("Live target / position quote board", expanded=True):
-            render_live_market_monitor(
+            market_frame = render_live_market_monitor(
                 service,
                 broker_snapshot,
                 key_prefix="command_live_market",
                 max_symbols=25,
                 compact=True,
             )
+
+    st.divider()
+    st.subheader("Agent + human readiness gates")
+    render_readiness_panel(
+        service,
+        strategy_service,
+        settings,
+        broker_snapshot=broker_snapshot,
+        market_frame=market_frame,
+        ledger_snapshot=ledger,
+    )
 
     st.divider()
     _quick_rebalance_preview(service, settings)
