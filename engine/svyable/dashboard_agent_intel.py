@@ -97,11 +97,36 @@ def _render_ranked(trace: dict[str, Any]) -> None:
         st.dataframe(frame, use_container_width=True, hide_index=True)
 
 
+def _render_counterfactuals(context: dict[str, Any]) -> None:
+    explanation = context.get("selection_explanation", {}) or {}
+    readiness = context.get("decision_readiness", {}) or {}
+    cols = st.columns(4)
+    cols[0].metric("Decision readiness", readiness.get("status", "—"))
+    cols[1].metric("Allowed candidates", readiness.get("allowed_candidate_count", 0))
+    cols[2].metric("Focus", explanation.get("focus_candidate_id", "—"))
+    cols[3].metric("Action", explanation.get("focus_action", "—"))
+    issues = readiness.get("issues", []) or []
+    if issues:
+        st.warning("; ".join(str(item) for item in issues))
+    st.markdown("**Why this candidate?**")
+    st.write(explanation.get("summary", "No explanation available."))
+    focus_blockers = explanation.get("focus_blockers", []) or []
+    if focus_blockers:
+        st.caption("Focus status: " + "; ".join(str(item) for item in focus_blockers))
+    alternatives = pd.DataFrame(explanation.get("alternatives", []))
+    if alternatives.empty:
+        st.info("No counterfactual alternatives available.")
+    else:
+        st.markdown("**Counterfactual alternatives**")
+        st.dataframe(alternatives, use_container_width=True, hide_index=True)
+
+
 def _render_context(context: dict[str, Any]) -> None:
     summary = context.get("summary", {})
     trace = context.get("meta_decision_trace", {})
     rails = context.get("rails", {})
     health = context.get("focus_candidate_artifact_health", {})
+    readiness = context.get("decision_readiness", {})
     factor_summary = health.get("factor_trend_summary", {}) or {}
 
     cols = st.columns(6)
@@ -109,13 +134,13 @@ def _render_context(context: dict[str, Any]) -> None:
     cols[1].metric("Mode", summary.get("mode", "—"))
     cols[2].metric("Candidates", summary.get("candidate_count", 0))
     cols[3].metric("Eligible", summary.get("eligible_count", 0))
-    cols[4].metric("Focus", trace.get("selected_candidate_id", "—"))
+    cols[4].metric("Readiness", readiness.get("status", "—"))
     cols[5].metric("Factor review", factor_summary.get("headline", "—"))
 
     if health.get("inputs_stale") or health.get("missing_execution_columns"):
         st.warning(f"Artifact issue: stale={health.get('inputs_stale')}, missing={health.get('missing_execution_columns')}")
 
-    tabs = st.tabs(["Decision tree", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
+    tabs = st.tabs(["Decision tree", "Counterfactuals", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
     with tabs[0]:
         _render_tree(trace)
         st.markdown("**Allowed candidate IDs**")
@@ -125,20 +150,22 @@ def _render_context(context: dict[str, Any]) -> None:
             with st.expander("Blocked candidates"):
                 st.dataframe(blocked, use_container_width=True, hide_index=True)
     with tabs[1]:
-        _render_regime(trace)
+        _render_counterfactuals(context)
     with tabs[2]:
-        _render_ranked(trace)
+        _render_regime(trace)
     with tabs[3]:
-        _render_weights(trace)
+        _render_ranked(trace)
     with tabs[4]:
-        st.json(context)
+        _render_weights(trace)
     with tabs[5]:
+        st.json(context)
+    with tabs[6]:
         st.markdown(render_agent_memo(context))
 
 
 def render_agent_intel(output_root: str | Path) -> None:
     st.subheader("Selection meta harness")
-    st.caption("Visible selection diagnostics for human review: legal candidates, regime proxy, score tree, gates, factor warnings, and weight provenance.")
+    st.caption("Visible selection diagnostics for human review: legal candidates, regime proxy, score tree, gates, factor warnings, counterfactual alternatives, and weight provenance.")
     root = Path(output_root)
     left, right = st.columns([1, 3])
     if left.button("Regenerate latest context pack", type="primary", use_container_width=True):
