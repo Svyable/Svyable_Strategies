@@ -2,10 +2,10 @@
 
 The harness keeps the daily research/execution loop separate from repository
 self-improvement. It packages the latest immutable candidate board, decision
-rails, artifact health, factor warnings, and a visible meta decision trace for an
-agent or human PM. The only valid agent output remains
-``strategy_selection/agent_decision.json``; this module never emits orders and
-never modifies strategy code.
+rails, artifact health, factor warnings, a visible meta decision trace, and
+counterfactual candidate explanations for an agent or human PM. The only valid
+agent output remains ``strategy_selection/agent_decision.json``; this module
+never emits orders and never modifies strategy code.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import pandas as pd
 from svyable.agent_meta_trace import build_meta_trace
 from svyable.calendar import expected_last_close
 from svyable.factor_health_tools import factor_review_summary, factor_trend_alerts
+from svyable.selection_explain import activation_readiness_from_context, explain_candidate_choice
 from svyable.strategy_selector import load_policy
 
 
@@ -215,12 +216,18 @@ def build_agent_context(
     policy = load_policy(root)
     rails = _decision_rails(board)
     focus = _pick_focus_candidate(board, selection)
+    focus_id = _focus_candidate_id(board, selection)
     focus_health = _artifact_health(focus.get("output_dir") if focus is not None else None)
     trace = build_meta_trace(
         board,
-        selected_candidate_id=_focus_candidate_id(board, selection),
+        selected_candidate_id=focus_id,
         artifact_health=focus_health,
         max_candidates=max(8, min(max_candidates, 15)),
+    )
+    explanation = explain_candidate_choice(
+        board,
+        selected_candidate_id=focus_id,
+        max_alternatives=max(8, min(max_candidates, 15)),
     )
     current_positions = _read_json(root / "strategy_selection" / "current_positions.json")
 
@@ -248,15 +255,17 @@ def build_agent_context(
         },
         "focus_candidate_artifact_health": focus_health,
         "meta_decision_trace": trace,
+        "selection_explanation": explanation,
         "candidates": _candidate_table(board, max_candidates),
         "agent_contract": {
-            "repo_to_agent": "Immutable board, current state, artifact health, visible score tree, and allowed candidate IDs.",
+            "repo_to_agent": "Immutable board, current state, artifact health, visible score tree, counterfactual alternatives, and allowed candidate IDs.",
             "agent_to_repo": "A hash-matched agent_decision.json selecting one allowed candidate with confidence and reason.",
             "repo_to_order_plan": "Only activated canonical weights feed rebalance planning, preflight, and any sandbox submission.",
             "self_improvement_rule": "Code changes belong in separate PR/dev cycles and must not alter the same morning decision run.",
             "visibility_rule": "The trace is an auditable rationale tree, not private chain-of-thought.",
         },
     }
+    context["decision_readiness"] = activation_readiness_from_context(context)
     return context
 
 
@@ -287,10 +296,29 @@ def _node_markdown(nodes: list[dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+def _alternatives_markdown(explanation: dict[str, Any]) -> str:
+    alternatives = explanation.get("alternatives", []) if explanation else []
+    if not alternatives:
+        return "No alternatives available."
+    headers = ["candidate_id", "eligible", "utility_bps_delta", "expected_alpha_bps_delta", "one_way_turnover_delta", "blockers"]
+    rows = ["| " + " | ".join(headers) + " |", "| " + " | ".join(["---"] * len(headers)) + " |"]
+    for item in alternatives[:10]:
+        row = []
+        for header in headers:
+            value = item.get(header, "")
+            if isinstance(value, list):
+                value = "; ".join(value)
+            row.append(str(value))
+        rows.append("| " + " | ".join(row) + " |")
+    return "\n".join(rows)
+
+
 def render_agent_memo(context: dict[str, Any]) -> str:
     rails = context["rails"]
     health = context.get("focus_candidate_artifact_health", {})
     trace = context.get("meta_decision_trace", {})
+    explanation = context.get("selection_explanation", {}) or {}
+    readiness = context.get("decision_readiness", {}) or {}
     regime = trace.get("visible_regime", {}) or {}
     score = trace.get("selected_score_breakdown", {}) or {}
     summary = health.get("factor_trend_summary", {}) or {}
@@ -302,6 +330,7 @@ def render_agent_memo(context: dict[str, Any]) -> str:
         f"- Candidate hash: `{context['candidate_set_hash']}`",
         f"- Mode: `{context['summary']['mode']}`",
         f"- Visible regime proxy: `{regime.get('state')}` with probabilities `{regime.get('probabilities')}`",
+        f"- Decision readiness: `{readiness.get('status')}` · next step: `{readiness.get('next_step')}`",
         f"- Eligible candidates: **{context['summary']['eligible_count']} / {context['summary']['candidate_count']}**",
         f"- Planned candidate: `{context['summary'].get('planned_candidate')}`",
         f"- Top eligible candidate: `{context['summary'].get('top_eligible_candidate')}`",
@@ -310,6 +339,11 @@ def render_agent_memo(context: dict[str, Any]) -> str:
     ]
     lines.extend(f"- {rule}" for rule in rails["hard_rules"])
     lines.extend([
+        "",
+        "## Choice explanation",
+        explanation.get("summary", "No selection explanation available."),
+        "",
+        _alternatives_markdown(explanation),
         "",
         "## Visible decision tree for focus candidate",
         f"- Selected/focus candidate: `{trace.get('selected_candidate_id')}`",
@@ -363,7 +397,7 @@ def _decision_template(context: dict[str, Any]) -> dict[str, Any]:
         "candidate_set_hash": context["candidate_set_hash"],
         "candidate_id": default,
         "confidence": 0.0,
-        "reason": "Choose only an allowed candidate_id after reviewing the context pack and visible decision tree.",
+        "reason": "Choose only an allowed candidate_id after reviewing the context pack, visible decision tree, and counterfactual alternatives.",
     }
 
 
