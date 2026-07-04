@@ -89,14 +89,13 @@ def _strategy_artifact_card(service: DashboardService) -> dict:
     data = meta.get("data") or {}
     config_hash = str(meta.get("config_hash", ""))
 
-    long_gross = short_gross = net = gross = 0.0
+    long_gross = short_gross = gross = 0.0
     positions = 0
     if not weights.empty:
         column = "weight" if "weight" in weights.columns else weights.columns[0]
         series = pd.to_numeric(weights[column], errors="coerce").dropna()
         long_gross = float(series.clip(lower=0.0).sum())
         short_gross = float(series.clip(upper=0.0).abs().sum())
-        net = float(series.sum())
         gross = float(series.abs().sum())
         positions = int((series.abs() > 1e-9).sum())
 
@@ -224,13 +223,14 @@ def render_command_center(
     ledger = _safe_ledger_snapshot(service)
     health = ledger.get("health", {})
     last_run = health.get("last_daily_run") or {}
+    root_label = Path(output_root).name or str(output_root)
     cols = st.columns(6)
     cols[0].metric("Last daily run", last_run.get("ts", "never"))
     cols[1].metric("Run status", last_run.get("status", "—"))
     cols[2].metric("Tracking days", health.get("tracking_days", 0))
     cols[3].metric("Warnings 7d", health.get("warnings_7d", 0))
     cols[4].metric("Critical 7d", health.get("critical_7d", 0))
-    cols[5].metric("Output root", str(output_root).split("/")[-1] or str(output_root))
+    cols[5].metric("Output root", root_label)
 
     st.divider()
     st.subheader("Strategy artifact and shadow NAV")
