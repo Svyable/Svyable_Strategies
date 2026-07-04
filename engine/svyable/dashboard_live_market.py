@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from svyable.dashboard_service import DashboardService
-from svyable.dashboard_ui import money, percent
+from svyable.dashboard_ui import money
 
 
 def _positions_series(positions: pd.DataFrame) -> pd.Series:
@@ -191,10 +191,12 @@ def render_live_market_monitor(
 
     quote_count = int(frame["quote_ok"].sum()) if "quote_ok" in frame else 0
     missing = int(len(frame) - quote_count)
-    avg_spread = pd.to_numeric(frame.get("spread_bps"), errors="coerce").dropna().mean()
-    wide = pd.to_numeric(frame.get("spread_bps"), errors="coerce").dropna()
+    spread_source = frame["spread_bps"] if "spread_bps" in frame.columns else pd.Series(dtype=float)
+    avg_spread = pd.to_numeric(spread_source, errors="coerce").dropna().mean()
+    wide = pd.to_numeric(spread_source, errors="coerce").dropna()
+    delta_source = frame["delta_notional"] if "delta_notional" in frame.columns else pd.Series(dtype=float)
     wide_count = int((wide > 25.0).sum()) if len(wide) else 0
-    gross_delta = pd.to_numeric(frame.get("delta_notional"), errors="coerce").abs().sum()
+    gross_delta = pd.to_numeric(delta_source, errors="coerce").abs().sum()
 
     cols = st.columns(5)
     cols[0].metric("Quoted", f"{quote_count}/{len(frame)}")
