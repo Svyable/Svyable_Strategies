@@ -18,6 +18,16 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Golden weights are an exact regression contract, so CI must not let hash
+  # randomization or BLAS thread scheduling become hidden inputs.
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  VECLIB_MAXIMUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
+
 jobs:
   offline-engine:
     runs-on: ubuntu-latest
@@ -34,12 +44,26 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: engine/requirements.txt
+          cache-dependency-path: |
+            engine/requirements.txt
+            engine/requirements.lock
 
       - name: Install dashboard dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          # requirements.txt intentionally stays loose for local development.
+          # CI constrains the resolver with requirements.lock so the golden
+          # portfolio is testing strategy/code changes, not dependency drift.
+          python -m pip install -r requirements.txt -c requirements.lock
+          python - <<'PY'
+          import numpy, pandas
+          try:
+              import sklearn
+              sklearn_v = sklearn.__version__
+          except Exception:
+              sklearn_v = "not-installed"
+          print(f"CI deps: numpy={numpy.__version__} pandas={pandas.__version__} sklearn={sklearn_v}")
+          PY
 
       - name: Compile modules
         run: python -m compileall -q svyable
