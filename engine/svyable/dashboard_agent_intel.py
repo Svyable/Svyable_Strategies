@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from svyable.agent_decision_guard import validate_agent_decision, write_guard_report
 from svyable.agent_pm_harness import render_agent_memo, write_agent_pm_pack
 from svyable.dashboard_ui import percent
 
@@ -121,7 +122,34 @@ def _render_counterfactuals(context: dict[str, Any]) -> None:
         st.dataframe(alternatives, use_container_width=True, hide_index=True)
 
 
-def _render_context(context: dict[str, Any]) -> None:
+def _render_decision_guard(output_root: str | Path) -> None:
+    root = Path(output_root)
+    left, right = st.columns([1, 3])
+    if left.button("Write guard report", use_container_width=True):
+        try:
+            report = write_guard_report(root)
+            st.success(f"Wrote {report.get('report_path')}")
+        except Exception as exc:
+            st.error(str(exc))
+            return
+    right.caption("Validates `strategy_selection/agent_decision.json` against the latest context before activation.")
+    report = validate_agent_decision(root)
+    cols = st.columns(5)
+    cols[0].metric("Guard", report.get("status", "—"))
+    cols[1].metric("Candidate", report.get("candidate_id", "—"))
+    cols[2].metric("Confidence", _num(report.get("confidence")))
+    cols[3].metric("Blockers", len(report.get("blockers", []) or []))
+    cols[4].metric("Warnings", len(report.get("warnings", []) or []))
+    blockers = report.get("blockers", []) or []
+    warnings = report.get("warnings", []) or []
+    if blockers:
+        st.error("; ".join(str(item) for item in blockers))
+    if warnings:
+        st.warning("; ".join(str(item) for item in warnings))
+    st.json(report)
+
+
+def _render_context(context: dict[str, Any], output_root: str | Path) -> None:
     summary = context.get("summary", {})
     trace = context.get("meta_decision_trace", {})
     rails = context.get("rails", {})
@@ -140,7 +168,7 @@ def _render_context(context: dict[str, Any]) -> None:
     if health.get("inputs_stale") or health.get("missing_execution_columns"):
         st.warning(f"Artifact issue: stale={health.get('inputs_stale')}, missing={health.get('missing_execution_columns')}")
 
-    tabs = st.tabs(["Decision tree", "Counterfactuals", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
+    tabs = st.tabs(["Decision tree", "Decision guard", "Counterfactuals", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
     with tabs[0]:
         _render_tree(trace)
         st.markdown("**Allowed candidate IDs**")
@@ -150,22 +178,24 @@ def _render_context(context: dict[str, Any]) -> None:
             with st.expander("Blocked candidates"):
                 st.dataframe(blocked, use_container_width=True, hide_index=True)
     with tabs[1]:
-        _render_counterfactuals(context)
+        _render_decision_guard(output_root)
     with tabs[2]:
-        _render_regime(trace)
+        _render_counterfactuals(context)
     with tabs[3]:
-        _render_ranked(trace)
+        _render_regime(trace)
     with tabs[4]:
-        _render_weights(trace)
+        _render_ranked(trace)
     with tabs[5]:
-        st.json(context)
+        _render_weights(trace)
     with tabs[6]:
+        st.json(context)
+    with tabs[7]:
         st.markdown(render_agent_memo(context))
 
 
 def render_agent_intel(output_root: str | Path) -> None:
     st.subheader("Selection meta harness")
-    st.caption("Visible selection diagnostics for human review: legal candidates, regime proxy, score tree, gates, factor warnings, counterfactual alternatives, and weight provenance.")
+    st.caption("Visible selection diagnostics for human review: legal candidates, regime proxy, score tree, gates, factor warnings, counterfactual alternatives, guard validation, and weight provenance.")
     root = Path(output_root)
     left, right = st.columns([1, 3])
     if left.button("Regenerate latest context pack", type="primary", use_container_width=True):
@@ -179,4 +209,4 @@ def render_agent_intel(output_root: str | Path) -> None:
     if not context:
         st.info("No latest context yet. Run `python -m svyable.strategy_daily --evaluate-only` or `python -m svyable.agent_pm_harness`.")
         return
-    _render_context(context)
+    _render_context(context, root)
