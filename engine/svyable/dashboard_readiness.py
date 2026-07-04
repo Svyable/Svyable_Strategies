@@ -56,6 +56,15 @@ def _quote_gate(market_frame: pd.DataFrame | None) -> dict[str, str]:
     return _gate("Live quotes", _PASS, f"{len(market_frame)} symbols quoted; spreads acceptable", "broker")
 
 
+def _ledger_health(service: DashboardService, ledger_snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if ledger_snapshot is not None:
+        return ledger_snapshot.get("health", {})
+    try:
+        return service.ledger_snapshot().get("health", {})
+    except Exception:
+        return {}
+
+
 def build_readiness_snapshot(
     service: DashboardService,
     strategy_service: StrategySelectionService,
@@ -117,7 +126,7 @@ def build_readiness_snapshot(
 
     gates.append(_quote_gate(market_frame))
 
-    health = (ledger_snapshot or service.ledger_snapshot()).get("health", {}) if ledger_snapshot is not None else {}
+    health = _ledger_health(service, ledger_snapshot)
     critical = int(health.get("critical_7d", 0) or 0)
     warnings = int(health.get("warnings_7d", 0) or 0)
     if critical:
