@@ -8,6 +8,8 @@ This is the "new and improved" surface for Svyable's agentic setup. It composes:
    alpha-vs-turnover scatter, so the trade-off the agent optimizes is legible.
 3. A cross-candidate equity overlay — every eligible recipe's shadow NAV on one
    axis, the currently-held strategy highlighted.
+4. A Q23-style stress and what-if lab — red-market survival, drawdown recovery,
+   monthly candidate heatmaps, and research-only blend experiments.
 
 Then it delegates to the existing :func:`render_strategy_selector` control
 surface (policy, chimera blends, evaluation, activation) which was previously
@@ -26,6 +28,7 @@ from svyable.dashboard_compare import render_comparison
 from svyable.dashboard_data import load_candidate_returns, load_candidate_weights
 from svyable.dashboard_stack import render_overlap
 from svyable.dashboard_strategy_selector import render_strategy_selector
+from svyable.dashboard_stress import render_stress_lab
 from svyable.dashboard_ui import render_figure
 from svyable.strategy_selection_service import StrategySelectionService
 
@@ -89,9 +92,16 @@ def render_agent(output_root: str | Path) -> None:
 
     _render_decision_hero(service, board)
 
-    board_tab, compare_tab, control_tab = st.tabs(
-        ["🎯 Board", "⚖️ Compare strategies", "🛠️ Control surface"]
+    board_tab, compare_tab, stress_tab, control_tab = st.tabs(
+        ["🎯 Board", "⚖️ Compare strategies", "🧪 Stress / what-if lab", "🛠️ Control surface"]
     )
+
+    curves = load_candidate_returns(service.output_root, board)
+    registry = None
+    try:
+        registry = service.registry()
+    except Exception:
+        pass
 
     with board_tab:
         left, right = st.columns(2)
@@ -106,27 +116,29 @@ def render_agent(output_root: str | Path) -> None:
             render_figure(charts.alpha_vs_cost_scatter(board))
 
     with compare_tab:
-        curves = load_candidate_returns(service.output_root, board)
         if len(curves) >= 2:
             common_start = st.checkbox(
                 "Align to common start date",
                 value=True,
                 help="Trim every curve to the latest shared start so the comparison is apples-to-apples.",
             )
+            display_curves = curves
             if common_start:
                 start = max(series.index[0] for series in curves.values())
-                curves = {name: series[series.index >= start] for name, series in curves.items()}
+                display_curves = {name: series[series.index >= start] for name, series in curves.items()}
             render_figure(
                 charts.multi_equity_chart(
-                    curves, highlight=service.state().get("selected_strategy_id")
+                    display_curves, highlight=service.state().get("selected_strategy_id")
                 )
             )
-            try:
-                registry = service.registry()
-            except Exception:
-                registry = None
-            render_comparison(curves, registry)
+            render_comparison(display_curves, registry)
             render_overlap(load_candidate_weights(service.output_root, board))
+        else:
+            st.caption("No per-candidate return history found yet for the current board.")
+
+    with stress_tab:
+        if len(curves) >= 2:
+            render_stress_lab(curves, board=board, registry=registry)
         else:
             st.caption("No per-candidate return history found yet for the current board.")
 
