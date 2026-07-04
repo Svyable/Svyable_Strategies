@@ -19,38 +19,56 @@ from svyable.dashboard_service import DashboardService
 from svyable.dashboard_ui import money
 
 
-def _positions_series(positions: pd.DataFrame) -> pd.Series:
-    if positions is None or positions.empty or "symbol" not in positions.columns:
-        return pd.Series(dtype=float)
-    frame = positions.copy()
-    frame["symbol"] = frame["symbol"].astype(str).str.upper()
-    qty = pd.to_numeric(frame.get("quantity", 0.0), errors="coerce").fillna(0.0)
-    return qty.groupby(frame["symbol"]).sum()
-
-
-def _position_mark_series(positions: pd.DataFrame) -> pd.Series:
-    if positions is None or positions.empty or "symbol" not in positions.columns or "mark" not in positions.columns:
-        return pd.Series(dtype=float)
-    frame = positions.copy()
-    frame["symbol"] = frame["symbol"].astype(str).str.upper()
-    mark = pd.to_numeric(frame["mark"], errors="coerce")
-    return mark.groupby(frame["symbol"]).last()
-
-
-def _quote_price(row: pd.Series) -> float | None:
-    for key in ("mark", "mid", "last", "close", "prev_close"):
-        value = row.get(key)
-        if pd.notna(value) and float(value) > 0:
-            return float(value)
-    return None
-
-
 def _safe_float(value: object, default: float = 0.0) -> float:
     try:
         number = float(value)
     except (TypeError, ValueError):
         return default
     return default if pd.isna(number) else number
+
+
+def _safe_optional_float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(number):
+        return None
+    return number
+
+
+def _numeric_column(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    if column in frame.columns:
+        raw = frame[column]
+    else:
+        raw = pd.Series(default, index=frame.index)
+    return pd.to_numeric(raw, errors="coerce").fillna(default)
+
+
+def _positions_series(positions: pd.DataFrame) -> pd.Series:
+    if positions is None or positions.empty or "symbol" not in positions.columns:
+        return pd.Series(dtype=float)
+    frame = positions.copy()
+    frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    qty = _numeric_column(frame, "quantity", 0.0)
+    return qty.groupby(frame["symbol"]).sum()
+
+
+def _position_mark_series(positions: pd.DataFrame) -> pd.Series:
+    if positions is None or positions.empty or "symbol" not in positions.columns:
+        return pd.Series(dtype=float)
+    frame = positions.copy()
+    frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    mark = _numeric_column(frame, "mark", 0.0)
+    return mark.groupby(frame["symbol"]).last()
+
+
+def _quote_price(row: pd.Series) -> float | None:
+    for key in ("mark", "mid", "last", "close", "prev_close"):
+        number = _safe_optional_float(row.get(key))
+        if number is not None and number > 0:
+            return number
+    return None
 
 
 def _side_hint(delta_notional: float | None, threshold: float = 50.0) -> str:
@@ -90,10 +108,7 @@ def _market_table(
     equity = None
     if snapshot is not None:
         account = snapshot.get("account", {})
-        try:
-            equity = float(account.get("equity"))
-        except (TypeError, ValueError):
-            equity = None
+        equity = _safe_optional_float(account.get("equity"))
 
     target_rank = targets.abs().sort_values(ascending=False)
     symbols = list(target_rank.head(max_symbols).index)
@@ -113,12 +128,12 @@ def _market_table(
         row = {"symbol": symbol, **quote}
         row_series = pd.Series(row)
         price = _quote_price(row_series)
-        bid = row.get("bid")
-        ask = row.get("ask")
-        prev_close = row.get("prev_close") or row.get("close")
-        spread = float(ask) - float(bid) if bid is not None and ask is not None else None
+        bid = _safe_optional_float(row.get("bid"))
+        ask = _safe_optional_float(row.get("ask"))
+        prev_close = _safe_optional_float(row.get("prev_close")) or _safe_optional_float(row.get("close"))
+        spread = ask - bid if bid is not None and ask is not None else None
         spread_bps = (spread / price * 10_000.0) if spread is not None and price else None
-        change_pct = ((price / float(prev_close)) - 1.0) if price and prev_close else None
+        change_pct = ((price / prev_close) - 1.0) if price and prev_close else None
         qty = float(pos_qty.get(symbol, 0.0))
         mark = price or _safe_float(pos_mark.get(symbol, 0.0), 0.0)
         target_w = float(targets.get(symbol, 0.0))
@@ -130,10 +145,12 @@ def _market_table(
             else None
         )
         quote_ok = bool(price)
+        abs_delta = abs(delta_notional) if delta_notional is not None else None
         rows.append(
             {
                 "symbol": symbol,
                 "target_w": target_w,
+                "abs_target_w": abs(target_w),
                 "broker_qty": qty,
                 "price": price,
                 "bid": bid,
@@ -144,6 +161,7 @@ def _market_table(
                 "target_notional": target_notional,
                 "current_notional": current_notional,
                 "delta_notional": delta_notional,
+                "abs_delta_notional": abs_delta,
                 "trade_side_hint": _side_hint(delta_notional),
                 "quote_flag": "OK" if quote_ok else "MISSING",
                 "spread_flag": "WIDE" if spread_bps is not None and spread_bps > 25.0 else "OK",
@@ -156,7 +174,11 @@ def _market_table(
     frame = pd.DataFrame(rows)
     if frame.empty:
         return frame
-    frame = frame.sort_values(["quote_ok", "target_w"], ascending=[False, False])
+    frame = frame.sort_values(
+        ["quote_ok", "abs_delta_notional", "abs_target_w"],
+        ascending=[False, False, False],
+        na_position="last",
+    )
     return frame
 
 
