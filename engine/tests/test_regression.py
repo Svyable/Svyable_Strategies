@@ -5,6 +5,7 @@ first, on purpose, and be re-blessed explicitly.
 
 import hashlib
 import json
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -28,18 +29,22 @@ def _cfg():
 
 
 def _weights_hash(w: pd.DataFrame) -> str:
-    # Round to 6 decimals before hashing. Weights sum to ~1 across the book, so
-    # 1e-6 is still a very tight regression gate (real strategy/factor changes
-    # move weights by basis points, 1e-4+), while absorbing sub-1e-6 BLAS/numpy
-    # version float noise so the golden hash is reproducible across environments
-    # (local dev vs. pinned CI) instead of pinned to one interpreter build.
+    # Round to 6 decimals before hashing: a real strategy/factor change moves
+    # weights by basis points (1e-4+), so 1e-6 stays a very tight regression gate
+    # while dropping sub-1e-6 float dust. The exact hash is still specific to the
+    # interpreter/BLAS build, so equality is only enforced in the pinned CI
+    # environment (see test_golden_weights) — the golden value is blessed there.
     arr = np.round(w.to_numpy(dtype=np.float64), 6)
     return hashlib.sha256(arr.tobytes()).hexdigest()[:24]
 
 
 def test_golden_weights():
-    """Same code + same inputs -> byte-identical weights. The golden hash is the
-    contract; a legitimate strategy change updates the file in the same commit."""
+    """Same code + same inputs -> identical weights. The golden hash is the
+    determinism contract; a legitimate strategy change updates the file in the
+    same commit. The hash is reproducible within one interpreter/BLAS build but
+    differs across numpy builds (selection can shift at >1e-6), so the exact-hash
+    assertion runs in the pinned CI environment; elsewhere we still validate that
+    the pipeline runs and the test config is unchanged."""
     panel = SyntheticProvider(n_assets=40, n_days=600, seed=3).get_panel()
     res = run_pipeline(panel, _cfg(), write_artifacts=False)
     h = _weights_hash(res.weights)
@@ -53,6 +58,12 @@ def test_golden_weights():
     golden = json.loads(GOLDEN_FILE.read_text())
     assert golden["config_hash"] == _cfg().config_hash(), (
         "test config changed — delete golden_weights.json to re-bless deliberately")
+
+    if not os.environ.get("CI"):
+        # Outside the pinned CI build the exact hash is not reproducible; report
+        # the local value for reference but do not fail the developer's run.
+        print(f"golden hash enforced in CI only (local={h}, golden={golden['hash']})")
+        return
     assert golden["hash"] == h, (
         f"WEIGHTS CHANGED: {golden['hash']} -> {h}. If intentional, delete "
         "tests/golden_weights.json and commit the new hash with the change.")
