@@ -10,32 +10,33 @@ import pandas as pd
 import streamlit as st
 
 from svyable.agent_decision_guard import validate_agent_decision, write_guard_report
+from svyable.agent_gui_model import artifact_inventory, issue_summary, recommended_next_step, status_icon, workflow_steps
 from svyable.agent_pm_harness import render_agent_memo, write_agent_pm_pack
 from svyable.agent_review_audit import audit_review_receipt, write_review_audit
 from svyable.agent_review_receipt import write_review_receipt
 from svyable.dashboard_ui import percent
 
 
-def _load_latest_context(output_root: str | Path) -> dict[str, Any]:
-    path = Path(output_root) / "strategy_selection" / "latest_agent_context.json"
+def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
         return json.loads(path.read_text())
     except json.JSONDecodeError:
-        st.warning(f"Latest context is malformed: {path}")
+        st.warning(f"JSON is malformed: {path}")
         return {}
+
+
+def _load_latest_context(output_root: str | Path) -> dict[str, Any]:
+    return _read_json(Path(output_root) / "strategy_selection" / "latest_agent_context.json")
 
 
 def _load_latest_receipt(output_root: str | Path) -> dict[str, Any]:
-    path = Path(output_root) / "strategy_selection" / "latest_agent_review_receipt.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError:
-        st.warning(f"Latest receipt is malformed: {path}")
-        return {}
+    return _read_json(Path(output_root) / "strategy_selection" / "latest_agent_review_receipt.json")
+
+
+def _load_latest_audit(output_root: str | Path) -> dict[str, Any]:
+    return _read_json(Path(output_root) / "strategy_selection" / "latest_agent_review_audit.json")
 
 
 def _num(value: Any, suffix: str = "") -> str:
@@ -46,6 +47,92 @@ def _num(value: Any, suffix: str = "") -> str:
     if suffix == "%":
         return percent(number)
     return f"{number:.3f}{suffix}"
+
+
+def _download_file(path: Path, label: str) -> None:
+    if path.exists():
+        st.download_button(
+            label,
+            data=path.read_text(),
+            file_name=path.name,
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+
+def _status_markdown(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    frame.insert(0, "", frame["status"].map(status_icon))
+    return frame
+
+
+def _render_overview(context: dict[str, Any], output_root: str | Path) -> None:
+    root = Path(output_root)
+    guard = validate_agent_decision(root)
+    receipt = _load_latest_receipt(root)
+    audit = _load_latest_audit(root) or audit_review_receipt(root)
+    steps = workflow_steps(context, guard, receipt, audit)
+    issues = issue_summary(context, guard, receipt, audit)
+
+    top = st.columns(4)
+    top[0].metric("Workflow", f"{status_icon(issues['status'])} {issues['status']}")
+    top[1].metric("Next action", recommended_next_step(steps))
+    top[2].metric("Blockers", len(issues["blockers"]))
+    top[3].metric("Warnings", len(issues["warnings"]))
+
+    st.markdown("### Operator stepper")
+    st.dataframe(_status_markdown(steps), use_container_width=True, hide_index=True)
+
+    with st.expander("Blockers and warnings", expanded=bool(issues["blockers"])):
+        if not issues["blockers"] and not issues["warnings"]:
+            st.success("No current blockers or warnings across context, guard, receipt, and audit.")
+        for item in issues["blockers"]:
+            st.error(item)
+        for item in issues["warnings"]:
+            st.warning(item)
+
+    st.markdown("### One-click review actions")
+    actions = st.columns(4)
+    if actions[0].button("Regenerate context", type="primary", use_container_width=True):
+        try:
+            pack = write_agent_pm_pack(root)
+            st.success(f"Wrote {pack.memo_path}")
+        except Exception as exc:
+            st.error(str(exc))
+    if actions[1].button("Write guard", use_container_width=True):
+        try:
+            report = write_guard_report(root)
+            st.success(f"Wrote {report.get('report_path')}")
+        except Exception as exc:
+            st.error(str(exc))
+    if actions[2].button("Write receipt", use_container_width=True):
+        try:
+            receipt = write_review_receipt(root)
+            st.success(f"Wrote {receipt.get('receipt_md')}")
+        except Exception as exc:
+            st.error(str(exc))
+    if actions[3].button("Write audit", use_container_width=True):
+        try:
+            report = write_review_audit(root)
+            st.success(f"Wrote {report.get('report_path')}")
+        except Exception as exc:
+            st.error(str(exc))
+
+    st.markdown("### Artifact inventory")
+    artifacts = pd.DataFrame(artifact_inventory(root))
+    st.dataframe(artifacts, use_container_width=True, hide_index=True)
+
+    dl = st.columns(4)
+    with dl[0]:
+        _download_file(root / "strategy_selection" / "latest_agent_pm_memo.md", "Download memo")
+    with dl[1]:
+        _download_file(root / "strategy_selection" / "latest_agent_context.json", "Download context")
+    with dl[2]:
+        _download_file(root / "strategy_selection" / "latest_agent_review_receipt.md", "Download receipt")
+    with dl[3]:
+        _download_file(root / "strategy_selection" / "latest_agent_review_audit.json", "Download audit")
 
 
 def _render_tree(trace: dict[str, Any]) -> None:
@@ -61,7 +148,7 @@ def _render_tree(trace: dict[str, Any]) -> None:
     if nodes.empty:
         st.info("No gate table available yet.")
     else:
-        st.dataframe(nodes, use_container_width=True, hide_index=True)
+        st.dataframe(_status_markdown(nodes.to_dict(orient="records")), use_container_width=True, hide_index=True)
 
 
 def _render_regime(trace: dict[str, Any]) -> None:
@@ -148,7 +235,7 @@ def _render_decision_guard(output_root: str | Path) -> None:
     right.caption("Validates `strategy_selection/agent_decision.json` against the latest context before activation.")
     report = validate_agent_decision(root)
     cols = st.columns(5)
-    cols[0].metric("Guard", report.get("status", "—"))
+    cols[0].metric("Guard", f"{status_icon(report.get('status'))} {report.get('status', '—')}")
     cols[1].metric("Candidate", report.get("candidate_id", "—"))
     cols[2].metric("Confidence", _num(report.get("confidence")))
     cols[3].metric("Blockers", len(report.get("blockers", []) or []))
@@ -178,7 +265,7 @@ def _render_receipt(output_root: str | Path) -> None:
         st.info("No receipt yet. Write a review receipt after the guard report is ready.")
         return
     cols = st.columns(5)
-    cols[0].metric("Receipt", receipt.get("status", "—"))
+    cols[0].metric("Receipt", f"{status_icon(receipt.get('status'))} {receipt.get('status', '—')}")
     cols[1].metric("Candidate", receipt.get("candidate_id", "—"))
     cols[2].metric("Confidence", _num(receipt.get("confidence")))
     cols[3].metric("Blockers", len(receipt.get("blockers", []) or []))
@@ -199,7 +286,7 @@ def _render_review_audit(output_root: str | Path) -> None:
     right.caption("Checks that context, memo, decision, and guard files still match the review receipt hashes.")
     report = audit_review_receipt(root)
     cols = st.columns(5)
-    cols[0].metric("Audit", report.get("status", "—"))
+    cols[0].metric("Audit", f"{status_icon(report.get('status'))} {report.get('status', '—')}")
     cols[1].metric("Candidate", report.get("candidate_id", "—"))
     cols[2].metric("Checks", len(report.get("file_checks", []) or []))
     cols[3].metric("Blockers", len(report.get("blockers", []) or []))
@@ -210,7 +297,7 @@ def _render_review_audit(output_root: str | Path) -> None:
         st.warning("; ".join(str(item) for item in report.get("warnings", [])))
     checks = pd.DataFrame(report.get("file_checks", []))
     if not checks.empty:
-        st.dataframe(checks, use_container_width=True, hide_index=True)
+        st.dataframe(_status_markdown(checks.to_dict(orient="records")), use_container_width=True, hide_index=True)
     st.json(report)
 
 
@@ -227,14 +314,16 @@ def _render_context(context: dict[str, Any], output_root: str | Path) -> None:
     cols[1].metric("Mode", summary.get("mode", "—"))
     cols[2].metric("Candidates", summary.get("candidate_count", 0))
     cols[3].metric("Eligible", summary.get("eligible_count", 0))
-    cols[4].metric("Readiness", readiness.get("status", "—"))
+    cols[4].metric("Readiness", f"{status_icon(readiness.get('status'))} {readiness.get('status', '—')}")
     cols[5].metric("Factor review", factor_summary.get("headline", "—"))
 
     if health.get("inputs_stale") or health.get("missing_execution_columns"):
         st.warning(f"Artifact issue: stale={health.get('inputs_stale')}, missing={health.get('missing_execution_columns')}")
 
-    tabs = st.tabs(["Decision tree", "Decision guard", "Receipt", "Integrity audit", "Counterfactuals", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
+    tabs = st.tabs(["Overview", "Decision tree", "Decision guard", "Receipt", "Integrity audit", "Counterfactuals", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
     with tabs[0]:
+        _render_overview(context, output_root)
+    with tabs[1]:
         _render_tree(trace)
         st.markdown("**Allowed candidate IDs**")
         st.write(rails.get("allowed_candidate_ids", []))
@@ -242,40 +331,38 @@ def _render_context(context: dict[str, Any], output_root: str | Path) -> None:
         if not blocked.empty:
             with st.expander("Blocked candidates"):
                 st.dataframe(blocked, use_container_width=True, hide_index=True)
-    with tabs[1]:
-        _render_decision_guard(output_root)
     with tabs[2]:
-        _render_receipt(output_root)
+        _render_decision_guard(output_root)
     with tabs[3]:
-        _render_review_audit(output_root)
+        _render_receipt(output_root)
     with tabs[4]:
-        _render_counterfactuals(context)
+        _render_review_audit(output_root)
     with tabs[5]:
-        _render_regime(trace)
+        _render_counterfactuals(context)
     with tabs[6]:
-        _render_ranked(trace)
+        _render_regime(trace)
     with tabs[7]:
-        _render_weights(trace)
+        _render_ranked(trace)
     with tabs[8]:
-        st.json(context)
+        _render_weights(trace)
     with tabs[9]:
+        st.json(context)
+    with tabs[10]:
         st.markdown(render_agent_memo(context))
 
 
 def render_agent_intel(output_root: str | Path) -> None:
     st.subheader("Selection meta harness")
-    st.caption("Visible selection diagnostics for human review: legal candidates, regime proxy, score tree, gates, factor warnings, counterfactual alternatives, guard validation, review receipt, integrity audit, and weight provenance.")
+    st.caption("Visible selection diagnostics for human review: stepper, artifact inventory, legal candidates, regime proxy, score tree, gates, counterfactual alternatives, guard validation, review receipt, integrity audit, and weight provenance.")
     root = Path(output_root)
-    left, right = st.columns([1, 3])
-    if left.button("Regenerate latest context pack", type="primary", use_container_width=True):
-        try:
-            pack = write_agent_pm_pack(root)
-            st.success(f"Wrote {pack.memo_path}")
-        except Exception as exc:
-            st.error(str(exc))
-    right.caption(f"Output root: `{root}`")
     context = _load_latest_context(root)
     if not context:
         st.info("No latest context yet. Run `python -m svyable.strategy_daily --evaluate-only` or `python -m svyable.agent_pm_harness`.")
+        if st.button("Try to generate context pack", type="primary"):
+            try:
+                pack = write_agent_pm_pack(root)
+                st.success(f"Wrote {pack.memo_path}")
+            except Exception as exc:
+                st.error(str(exc))
         return
     _render_context(context, root)
