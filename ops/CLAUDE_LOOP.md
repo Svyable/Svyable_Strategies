@@ -6,7 +6,7 @@ The design principle is strict: **deterministic code computes complete candidate
 
 ```bash
 cd ~/Svyable_Strategies/engine
-uv venv .venv --python 3.12
+uv venv .venv --python 3.14
 uv pip install --python .venv/bin/python -r requirements.txt
 cp ../ops/com.svyable.daily.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.svyable.daily.plist

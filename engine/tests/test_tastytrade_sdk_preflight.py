@@ -33,15 +33,15 @@ class Tif(Enum):
     GTC = "GTC"
 
 
-class Kind(Enum):
-    MARKET = "Market"
-    LIMIT = "Limit"
+@dataclass
+class MarketOrder:
+    time_in_force: object
+    legs: list
 
 
 @dataclass
-class NewOrder:
+class LimitOrder:
     time_in_force: object
-    order_type: object
     legs: list
     price: Decimal | None = None
 
@@ -114,11 +114,11 @@ def bindings():
         get_market_data=market_data,
         get_market_data_by_type=market_data_by_type,
         InstrumentType=InstrumentType,
-        NewOrder=NewOrder,
+        LimitOrder=LimitOrder,
+        MarketOrder=MarketOrder,
         OrderAction=Action,
         OrderStatus=SimpleNamespace(),
         OrderTimeInForce=Tif,
-        OrderType=Kind,
     )
 
 

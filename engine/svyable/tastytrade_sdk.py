@@ -144,28 +144,44 @@ class OrderIntent:
         )
 
 
+class _PersistentLoop:
+    """One background event loop shared by every SDK call in this process.
+
+    The ``tastytrade>=13`` ``Session`` holds a long-lived ``httpx.AsyncClient``
+    that binds to the event loop of its first request. A naive bridge that spins
+    a fresh ``asyncio.run`` loop per call closes that loop and strands the client,
+    so the *next* call dies with ``RuntimeError: Event loop is closed``. Keeping a
+    single daemon loop alive for the process lifetime keeps the client valid
+    across every balances / positions / order call.
+    """
+
+    _lock = threading.Lock()
+    _loop: asyncio.AbstractEventLoop | None = None
+
+    @classmethod
+    def get(cls) -> asyncio.AbstractEventLoop:
+        with cls._lock:
+            loop = cls._loop
+            if loop is None or loop.is_closed():
+                loop = asyncio.new_event_loop()
+                threading.Thread(
+                    target=loop.run_forever,
+                    name="svyable-tasty-loop",
+                    daemon=True,
+                ).start()
+                cls._loop = loop
+            return loop
+
+
 def _run(awaitable: Awaitable[T]) -> T:
-    """Run one SDK coroutine from normal Python or an already-running event loop."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(awaitable)
+    """Run one SDK coroutine on the shared persistent event loop.
 
-    result: list[T] = []
-    error: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            result.append(asyncio.run(awaitable))
-        except BaseException as exc:  # pragma: no cover - defensive bridge
-            error.append(exc)
-
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    thread.join()
-    if error:
-        raise error[0]
-    return result[0]
+    Works whether or not the caller is itself inside an event loop (Streamlit,
+    Jupyter): the coroutine always executes on the dedicated background loop and
+    the calling thread simply blocks on the result.
+    """
+    loop = _PersistentLoop.get()
+    return asyncio.run_coroutine_threadsafe(awaitable, loop).result()
 
 
 def _float(value: Any) -> float | None:
@@ -204,11 +220,11 @@ def _load_bindings() -> SimpleNamespace:
         from tastytrade.market_data import get_market_data, get_market_data_by_type
         from tastytrade.order import (
             InstrumentType,
-            NewOrder,
+            LimitOrder,
+            MarketOrder,
             OrderAction,
             OrderStatus,
             OrderTimeInForce,
-            OrderType,
         )
     except ImportError as exc:  # pragma: no cover - installation error
         raise RuntimeError(
@@ -222,16 +238,16 @@ def _load_bindings() -> SimpleNamespace:
         get_market_data=get_market_data,
         get_market_data_by_type=get_market_data_by_type,
         InstrumentType=InstrumentType,
-        NewOrder=NewOrder,
+        LimitOrder=LimitOrder,
+        MarketOrder=MarketOrder,
         OrderAction=OrderAction,
         OrderStatus=OrderStatus,
         OrderTimeInForce=OrderTimeInForce,
-        OrderType=OrderType,
     )
 
 
 class TastySdkBroker:
-    """BrokerConnector-compatible adapter around ``tastytrade>=12``."""
+    """BrokerConnector-compatible adapter around ``tastytrade>=13``."""
 
     def __init__(
         self,
@@ -271,11 +287,29 @@ class TastySdkBroker:
         return self._account
 
     def validate_session(self) -> bool:
+        """Report whether the session can make authenticated requests.
+
+        tastytrade>=13 mints the OAuth bearer lazily, so ``validate`` returns
+        False on a brand-new session until the first token refresh. We warm the
+        token with ``refresh`` first so a healthy session never reports False on
+        the initial call. Any auth failure surfaces here as ``False`` rather than
+        crashing a status/health readout.
+        """
         validate = getattr(self.session, "validate", None)
-        if callable(validate):
-            return bool(validate())
-        a_validate = getattr(self.session, "a_validate", None)
-        return bool(_run(a_validate())) if callable(a_validate) else True
+        if validate is None:
+            return True
+        try:
+            refresh = getattr(self.session, "refresh", None)
+            if asyncio.iscoroutinefunction(refresh):
+                _run(refresh())
+            if asyncio.iscoroutinefunction(validate):
+                return bool(_run(validate()))
+            result = validate()
+            if asyncio.iscoroutine(result):
+                return bool(_run(result))
+            return bool(result)
+        except Exception:  # noqa: BLE001 — a health check must not raise
+            return False
 
     def _audit(self, event: str, payload: dict[str, Any]) -> None:
         self._audit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -500,23 +534,19 @@ class TastySdkBroker:
             if intent.tif == "day"
             else self.sdk.OrderTimeInForce.GTC
         )
-        order_type = (
-            self.sdk.OrderType.MARKET
-            if intent.order_type == "market"
-            else self.sdk.OrderType.LIMIT
+        if intent.order_type == "market":
+            return self.sdk.MarketOrder(time_in_force=tif, legs=[leg])
+        # tastytrade uses negative prices for debits, positive for credits.
+        signed = (
+            -abs(intent.limit_price or 0)
+            if intent.side == "buy"
+            else abs(intent.limit_price or 0)
         )
-        kwargs: dict[str, Any] = {
-            "time_in_force": tif,
-            "order_type": order_type,
-            "legs": [leg],
-        }
-        if intent.order_type == "limit":
-            # tastytrade SDK uses negative prices for debits, positive for credits.
-            signed = -abs(intent.limit_price or 0) if intent.side == "buy" else abs(
-                intent.limit_price or 0
-            )
-            kwargs["price"] = Decimal(str(round(signed, 4)))
-        return self.sdk.NewOrder(**kwargs)
+        return self.sdk.LimitOrder(
+            time_in_force=tif,
+            legs=[leg],
+            price=Decimal(str(round(signed, 4))),
+        )
 
     def build_equity_order(
         self,
@@ -767,7 +797,7 @@ class TastySdkBroker:
         today = datetime.now().date().isoformat()
         return {
             "environment": self.environment,
-            "sdk": "tastytrade>=12",
+            "sdk": "tastytrade>=13",
             "session_valid": self.validate_session(),
             "account": self.masked_account,
             "balances": self.get_account(),

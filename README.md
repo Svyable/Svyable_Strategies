@@ -232,16 +232,25 @@ Same-cycle repository self-improvement is forbidden. The daily loop must operate
 
 ## Install
 
-From `engine/`:
+**Requires Python 3.14+** (`pyproject.toml` sets `requires-python = ">=3.14"`; CI runs on 3.14). The project is managed with [`uv`](https://docs.astral.sh/uv/).
+
+From `engine/`, create the environment and install everything (research + GUI + broker adapter + dev/test extras):
 
 ```bash
-python -m pip install -r requirements.txt
+uv venv .venv --python 3.14
+uv pip install --python .venv/bin/python -r requirements.txt   # -> installs -e .[all,dev]
 ```
 
-For package installs, `pyproject.toml` exposes optional groups:
+For a byte-for-byte reproducible environment, install from the pinned lockfile instead:
 
 ```bash
-python -m pip install -e '.[all,dev]'
+uv pip install --python .venv/bin/python -r requirements.lock   # exact versions, verified in CI
+```
+
+`pyproject.toml` exposes the optional groups directly (`data`, `ml`, `hrp`, `gui`, `broker`, `dev`, `all`). The `broker` extra pins the Tastytrade SDK (`tastytrade>=13,<14`) plus `python-dotenv`:
+
+```bash
+uv pip install --python .venv/bin/python -e '.[all,dev]'
 ```
 
 ## Daily PM commands
