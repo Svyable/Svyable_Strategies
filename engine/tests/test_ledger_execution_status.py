@@ -97,8 +97,23 @@ def test_record_orders_keeps_dry_runs_ok():
         assert _run_status(path, run_id) == "ok"
 
 
+def test_update_run_status_escalates_but_does_not_mask_failure():
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "ledger.db"
+        ledger = Ledger(path)
+        run_id = ledger.record_run(kind="rebalance", strategy="test", status="ok")
+        ledger.update_run_status(run_id, "degraded")
+        ledger.update_run_status(run_id, "ok")
+        assert _run_status(path, run_id) == "degraded"
+        ledger.update_run_status(run_id, "failed")
+        ledger.update_run_status(run_id, "degraded")
+        ledger.close()
+        assert _run_status(path, run_id) == "failed"
+
+
 if __name__ == "__main__":
     test_record_orders_downgrades_fail_fast_rebalance_to_failed()
     test_record_orders_downgrades_best_effort_rebalance_to_degraded()
     test_record_orders_keeps_dry_runs_ok()
+    test_update_run_status_escalates_but_does_not_mask_failure()
     print(json.dumps({"status": "LEDGER EXECUTION STATUS TESTS PASSED"}))
