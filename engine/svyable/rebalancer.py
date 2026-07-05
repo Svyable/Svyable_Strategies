@@ -37,6 +37,13 @@ class PlannedOrder:
     est_price: float
     est_notional: float
     reason: str          # "rebalance" | "exit" | "adv_capped"
+    current_qty: float = 0.0
+
+    @property
+    def order_action(self) -> str:
+        if self.side == "buy":
+            return "buy_to_close" if self.current_qty < -1e-9 else "buy_to_open"
+        return "sell_to_close"
 
 
 def _result_status(result: dict[str, Any]) -> str:
@@ -57,7 +64,7 @@ def plan_orders(targets: pd.Series, equity: float, prices: dict[str, float],
                 positions: dict[str, float], cfg: SvyableConfig,
                 adv: dict[str, float] | None = None,
                 min_order_notional: float = 100.0) -> list[PlannedOrder]:
-    """targets: weight per symbol (sum <= lev_cap). positions: current qty."""
+    """targets: weight per symbol (sum <= lev_cap). positions: current signed qty."""
     orders: list[PlannedOrder] = []
     symbols = sorted(set(targets.index) | set(positions))
 
@@ -86,10 +93,14 @@ def plan_orders(targets: pd.Series, equity: float, prices: dict[str, float],
                 if abs(delta) < 1:
                     continue
 
+        side = "buy" if delta > 0 else "sell"
+        if side == "sell" and cur_qty <= 0:
+            raise ValueError(f"long-only plan would open/increase a short in {sym}")
         orders.append(PlannedOrder(
-            symbol=sym, side="buy" if delta > 0 else "sell",
+            symbol=sym, side=side,
             qty=int(abs(delta)), est_price=round(px, 4),
             est_notional=round(notional, 2), reason=reason,
+            current_qty=cur_qty,
         ))
 
     orders.sort(key=lambda o: (o.side != "sell", -o.est_notional))
@@ -121,6 +132,7 @@ def _submit_planned_order(
                 quantity=order.qty,
                 order_type="market",
                 dry_run=dry_run,
+                order_action=order.order_action,
             ),
             confirmation=confirmation,
         )
@@ -130,6 +142,7 @@ def _submit_planned_order(
             "symbol": order.symbol,
             "side": order.side,
             "qty": order.qty,
+            "order_action": order.order_action,
             "message": "Dry run only; no adapter preflight is available.",
         }
     return broker.submit_order(order.symbol, order.qty, order.side)
@@ -159,7 +172,7 @@ def execute_plan(
         "ts": datetime.now().isoformat(timespec="seconds"),
         "dry_run": dry_run,
         "fail_fast": fail_fast,
-        "planned": [asdict(o) for o in orders],
+        "planned": [asdict(o) | {"order_action": o.order_action} for o in orders],
         "results": [],
         "errors": [],
         "aborted": False,
@@ -176,6 +189,7 @@ def execute_plan(
             result.setdefault("symbol", order.symbol)
             result.setdefault("side", order.side)
             result.setdefault("qty", order.qty)
+            result.setdefault("order_action", order.order_action)
             record["results"].append(result)
         except Exception as exc:  # noqa: BLE001
             record["results"].append({
@@ -183,6 +197,7 @@ def execute_plan(
                 "symbol": order.symbol,
                 "side": order.side,
                 "qty": order.qty,
+                "order_action": order.order_action,
                 "error": str(exc),
             })
 
@@ -196,6 +211,7 @@ def execute_plan(
                         "symbol": skipped.symbol,
                         "side": skipped.side,
                         "qty": skipped.qty,
+                        "order_action": skipped.order_action,
                         "reason": "fail_fast",
                     })
                 break
