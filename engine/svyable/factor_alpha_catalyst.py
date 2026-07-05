@@ -12,32 +12,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from svyable import factors as legacy
 from svyable.config import SvyableConfig
+from svyable.factor_ohlcv_tools import atr, close_location, register_factor, rel_dollar_volume, true_range
 from svyable.panel import EPS, Panel, residual_returns, rolling_beta
-
-
-def _register(name: str, sleeve: str, fn, *, proven: bool, lineage: str, description: str) -> None:
-    legacy.REGISTRY.setdefault(name, {"fn": fn, "sleeve": sleeve, "proven": proven, "lineage": lineage, "description": description})
-
-
-def _true_range(panel: Panel) -> pd.DataFrame:
-    prev_close = panel.close.shift(1)
-    return np.maximum(panel.high - panel.low, np.maximum((panel.high - prev_close).abs(), (panel.low - prev_close).abs()))
-
-
-def _atr(panel: Panel, window: int = 14) -> pd.DataFrame:
-    return _true_range(panel).rolling(window, min_periods=max(5, window // 2)).mean()
-
-
-def _close_location(panel: Panel) -> pd.DataFrame:
-    return ((panel.close - panel.low) / (panel.high - panel.low + EPS) - 0.5).clip(-0.5, 0.5)
-
-
-def _rel_dollar_volume(panel: Panel, short: int = 5, long: int = 63) -> pd.DataFrame:
-    fast = panel.dollar_volume.rolling(short, min_periods=max(2, short // 2)).mean()
-    slow = panel.dollar_volume.rolling(long, min_periods=max(10, long // 2)).median()
-    return (fast / (slow + EPS)).clip(0.10, 6.0)
 
 
 def _residual(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
@@ -60,17 +37,17 @@ def residual_breakout_confirmation(panel: Panel, cfg: SvyableConfig) -> pd.DataF
     prior_high = residual_index.rolling(63, min_periods=32).max().shift(1)
     resid_vol = resid.rolling(42, min_periods=21).std()
     breakout = ((residual_index / (prior_high + EPS) - 1.0) / (resid_vol + EPS)).clip(-6.0, 6.0)
-    participation = np.sqrt(_rel_dollar_volume(panel, 5, 63))
+    participation = np.sqrt(rel_dollar_volume(panel, 5, 63))
     return (breakout * participation).clip(-6.0, 6.0)
 
 
 def downside_absorption_reversal(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     """Positive signal when recent downside is absorbed by strong closes and volume."""
     ret3 = panel.close / (panel.close.shift(3) + EPS) - 1.0
-    atr_pct = _atr(panel, 14) / (panel.close + EPS)
+    atr_pct = atr(panel, 14) / (panel.close + EPS)
     downside = (-ret3 / (np.sqrt(3.0) * (atr_pct + EPS))).clip(0.0, 6.0)
-    close_strength = _close_location(panel).clip(lower=0.0)
-    volume = np.sqrt(_rel_dollar_volume(panel, 3, 63))
+    close_strength = close_location(panel).clip(lower=0.0)
+    volume = np.sqrt(rel_dollar_volume(panel, 3, 63))
     follow = (panel.close / (panel.open + EPS) - 1.0).clip(lower=0.0) / (atr_pct + EPS)
     return (downside * (1.0 + close_strength) * volume * follow.clip(0.0, 4.0)).clip(-5.0, 5.0)
 
@@ -78,10 +55,10 @@ def downside_absorption_reversal(panel: Panel, cfg: SvyableConfig) -> pd.DataFra
 def failed_breakdown_reclaim(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     """Reclaim signal after probing below the prior monthly low and closing back strong."""
     prior_low = panel.low.rolling(21, min_periods=10).min().shift(1)
-    atr = _atr(panel, 14) + EPS
-    breakdown_probe = ((prior_low - panel.low) / atr).clip(0.0, 5.0)
-    reclaim = ((panel.close - prior_low) / atr).clip(-5.0, 5.0).clip(lower=0.0)
-    loc = _close_location(panel).clip(lower=0.0)
+    average_range = atr(panel, 14) + EPS
+    breakdown_probe = ((prior_low - panel.low) / average_range).clip(0.0, 5.0)
+    reclaim = ((panel.close - prior_low) / average_range).clip(-5.0, 5.0).clip(lower=0.0)
+    loc = close_location(panel).clip(lower=0.0)
     return (breakdown_probe * reclaim * (1.0 + loc)).clip(-5.0, 5.0)
 
 
@@ -99,7 +76,7 @@ def idiosyncratic_trend_quality(panel: Panel, cfg: SvyableConfig) -> pd.DataFram
 
 def volatility_transition_alpha(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     """Positive residual thrust as volatility exits compression into expansion."""
-    tr = _true_range(panel)
+    tr = true_range(panel)
     short_range = tr.rolling(8, min_periods=4).mean()
     mid_range = tr.rolling(21, min_periods=10).median()
     long_range = tr.rolling(84, min_periods=42).median()
@@ -111,12 +88,12 @@ def volatility_transition_alpha(panel: Panel, cfg: SvyableConfig) -> pd.DataFram
 
 
 def register_alpha_catalyst() -> None:
-    _register("residual_momentum_acceleration", "momentum", residual_momentum_acceleration, proven=False, lineage="beta-stripped residual acceleration", description="Five-day residual return acceleration versus the recent 21-day pace.")
-    _register("residual_breakout_confirmation", "momentum", residual_breakout_confirmation, proven=False, lineage="residual-price breakout confirmation", description="Residual cumulative-return breakout confirmed by dollar-volume participation.")
-    _register("downside_absorption_reversal", "meanrev", downside_absorption_reversal, proven=False, lineage="downside absorption reversal", description="Recent downside absorbed by strong closes, intraday follow-through, and volume.")
-    _register("failed_breakdown_reclaim", "meanrev", failed_breakdown_reclaim, proven=False, lineage="failed breakdown reclaim", description="Probe below prior monthly low followed by a strong reclaim close.")
-    _register("idiosyncratic_trend_quality", "momentum", idiosyncratic_trend_quality, proven=False, lineage="idiosyncratic trend quality", description="Residual trend IR with directional persistence and beta-dependence penalty.")
-    _register("volatility_transition_alpha", "momentum", volatility_transition_alpha, proven=False, lineage="volatility transition residual thrust", description="Positive residual thrust as range exits compression into expansion.")
+    register_factor("residual_momentum_acceleration", "momentum", residual_momentum_acceleration, proven=False, lineage="beta-stripped residual acceleration", description="Five-day residual return acceleration versus the recent 21-day pace.")
+    register_factor("residual_breakout_confirmation", "momentum", residual_breakout_confirmation, proven=False, lineage="residual-price breakout confirmation", description="Residual cumulative-return breakout confirmed by dollar-volume participation.")
+    register_factor("downside_absorption_reversal", "meanrev", downside_absorption_reversal, proven=False, lineage="downside absorption reversal", description="Recent downside absorbed by strong closes, intraday follow-through, and volume.")
+    register_factor("failed_breakdown_reclaim", "meanrev", failed_breakdown_reclaim, proven=False, lineage="failed breakdown reclaim", description="Probe below prior monthly low followed by a strong reclaim close.")
+    register_factor("idiosyncratic_trend_quality", "momentum", idiosyncratic_trend_quality, proven=False, lineage="idiosyncratic trend quality", description="Residual trend IR with directional persistence and beta-dependence penalty.")
+    register_factor("volatility_transition_alpha", "momentum", volatility_transition_alpha, proven=False, lineage="volatility transition residual thrust", description="Positive residual thrust as range exits compression into expansion.")
 
 
 register_alpha_catalyst()
