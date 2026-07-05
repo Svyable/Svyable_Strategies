@@ -30,6 +30,10 @@ TERMINAL_ORDER_STATUSES = frozenset(
     {"Filled", "Cancelled", "Expired", "Rejected", "Removed", "Partially Removed"}
 )
 
+ORDER_ACTIONS = frozenset(
+    {"buy_to_open", "buy_to_close", "sell_to_open", "sell_to_close"}
+)
+
 
 @dataclass(frozen=True)
 class QuoteSnapshot:
@@ -63,12 +67,14 @@ class OrderIntent:
     tif: str = "day"
     limit_price: float | None = None
     dry_run: bool = True
+    order_action: str | None = None
 
     def normalized(self) -> "OrderIntent":
         symbol = self.symbol.upper().strip()
         side = self.side.lower().strip()
         order_type = self.order_type.lower().strip()
         tif = self.tif.lower().strip()
+        order_action = self.order_action.lower().strip() if self.order_action else None
         if not symbol:
             raise ValueError("symbol is required")
         if side not in {"buy", "sell"}:
@@ -81,6 +87,10 @@ class OrderIntent:
             raise ValueError("tif must be day or gtc")
         if order_type == "limit" and (self.limit_price is None or self.limit_price <= 0):
             raise ValueError("a positive limit_price is required for limit orders")
+        if order_action and order_action not in ORDER_ACTIONS:
+            raise ValueError("order_action must be one of: " + ", ".join(sorted(ORDER_ACTIONS)))
+        if order_action and not order_action.startswith(side):
+            raise ValueError("order_action must agree with side")
         return OrderIntent(
             symbol=symbol,
             side=side,
@@ -89,6 +99,7 @@ class OrderIntent:
             tif=tif,
             limit_price=float(self.limit_price) if self.limit_price is not None else None,
             dry_run=bool(self.dry_run),
+            order_action=order_action,
         )
 
 
@@ -297,6 +308,48 @@ class TastySdkBroker:
                 out[row["symbol"]] = out.get(row["symbol"], 0.0) + qty
         return out
 
+    def pnl_report(self) -> dict[str, Any]:
+        account = self.get_account()
+        positions: list[dict[str, Any]] = []
+        total_value = 0.0
+        total_unrealized = 0.0
+        total_day = 0.0
+        for row in self.get_positions_frame():
+            if row["instrument_type"] != "Equity":
+                continue
+            qty = float(row.get("quantity") or 0.0)
+            mark = _float(row.get("mark")) or 0.0
+            value = row.get("market_value")
+            if value is None:
+                value = qty * mark
+            avg_open = _float(row.get("average_open_price"))
+            unrealized = (mark - avg_open) * qty if avg_open is not None else 0.0
+            day = _float(row.get("realized_today")) or 0.0
+            positions.append(
+                {
+                    "symbol": row["symbol"],
+                    "qty": qty,
+                    "mark": mark,
+                    "avg_open": avg_open,
+                    "unrealized": round(unrealized, 2),
+                    "pl_day": round(day, 2),
+                    "value": round(float(value or 0.0), 2),
+                }
+            )
+            total_value += float(value or 0.0)
+            total_unrealized += unrealized
+            total_day += day
+        return {
+            "account": self.account_number,
+            "positions": sorted(positions, key=lambda x: -abs(float(x["value"]))),
+            "total_position_value": round(total_value, 2),
+            "cash_balance": round(float(account.get("cash", 0.0)), 2),
+            "pending_cash": 0.0,
+            "net_liq": round(float(account.get("equity", 0.0)), 2),
+            "total_unrealized": round(total_unrealized, 2),
+            "total_pl_day": round(total_day, 2),
+        }
+
     # ------------------------------------------------------------------
     # Quotes
 
@@ -361,17 +414,22 @@ class TastySdkBroker:
     # ------------------------------------------------------------------
     # Orders
 
+    def _action_for_intent(self, intent: OrderIntent) -> Any:
+        action = intent.order_action or (
+            "buy_to_open" if intent.side == "buy" else "sell_to_close"
+        )
+        enum_name = action.upper()
+        member = getattr(self.sdk.OrderAction, enum_name, None)
+        if member is None:
+            raise RuntimeError(f"Installed tastytrade SDK lacks OrderAction.{enum_name}")
+        return member
+
     async def _build_order_async(self, intent: OrderIntent) -> Any:
         intent = intent.normalized()
         equity = await self.sdk.Equity.get(self.session, intent.symbol)
         if isinstance(equity, list):
             equity = equity[0]
-        action = (
-            self.sdk.OrderAction.BUY_TO_OPEN
-            if intent.side == "buy"
-            else self.sdk.OrderAction.SELL_TO_CLOSE
-        )
-        leg = equity.build_leg(intent.quantity, action)
+        leg = equity.build_leg(intent.quantity, self._action_for_intent(intent))
         tif = (
             self.sdk.OrderTimeInForce.DAY
             if intent.tif == "day"
@@ -404,6 +462,7 @@ class TastySdkBroker:
         order_type: str = "market",
         tif: str = "day",
         price: float | None = None,
+        order_action: str | None = None,
     ) -> Any:
         return _run(
             self._build_order_async(
@@ -415,6 +474,7 @@ class TastySdkBroker:
                     tif=tif,
                     limit_price=price,
                     dry_run=True,
+                    order_action=order_action,
                 )
             )
         )
@@ -485,7 +545,9 @@ class TastySdkBroker:
                 "symbol": intent.symbol,
                 "side": intent.side,
                 "quantity": intent.quantity,
+                "qty": intent.quantity,
                 "order_type": intent.order_type,
+                "order_action": intent.order_action,
                 "limit_price": intent.limit_price,
                 "fees": _model_dict(getattr(response, "fee_calculation", None)),
                 "buying_power_effect": _model_dict(
@@ -515,7 +577,15 @@ class TastySdkBroker:
         tif: str = "day",
         price: float | None = None,
     ) -> dict[str, Any]:
-        """BrokerConnector method. Production remains disabled without confirmation."""
+        """BrokerConnector compatibility method for test/sandbox callers only.
+
+        Production must use ``submit_intent(..., confirmation=account_number)`` so
+        the live confirmation gate cannot be bypassed by a generic protocol call.
+        """
+        if not self.settings.is_test:
+            raise RuntimeError(
+                "Use submit_intent(..., confirmation=<account_number>) for production."
+            )
         return self.submit_intent(
             OrderIntent(
                 symbol=symbol,
