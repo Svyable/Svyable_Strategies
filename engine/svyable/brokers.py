@@ -15,7 +15,6 @@ Safety invariants:
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -31,7 +30,12 @@ class BrokerConnector(Protocol):
 # ---------------------------------------------------------------------------
 
 class LocalPaperBroker:
-    """Offline paper account persisted to JSON. Fills instantly at given prices."""
+    """Offline paper account persisted to JSON. Fills instantly at given prices.
+
+    The production strategy is long-only, so this adapter rejects oversells instead
+    of silently creating short paper positions that the real order adapter would
+    not intentionally open.
+    """
 
     def __init__(self, state_file: str | Path, starting_cash: float = 100_000.0):
         self.path = Path(state_file)
@@ -62,6 +66,18 @@ class LocalPaperBroker:
         px = self._prices.get(symbol)
         if px is None or px <= 0:
             return {"status": "rejected", "symbol": symbol, "reason": "no price"}
+        qty = float(qty)
+        if qty <= 0:
+            return {"status": "rejected", "symbol": symbol, "reason": "non-positive quantity"}
+        current = float(self.state["positions"].get(symbol, 0.0))
+        if side == "sell" and qty > current + 1e-9:
+            return {
+                "status": "rejected",
+                "symbol": symbol,
+                "qty": qty,
+                "side": side,
+                "reason": "long-only paper broker refuses oversell",
+            }
         signed = qty if side == "buy" else -qty
         cost = signed * px
         if side == "buy" and cost > self.state["cash"] + 1e-6:
