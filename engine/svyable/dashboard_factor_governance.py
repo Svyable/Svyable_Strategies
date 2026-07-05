@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from svyable.alpha_gui_model import alpha_dashboard_metrics, alpha_factor_table, alpha_strategy_cards
 from svyable.dashboard_service import DashboardService
 from svyable.factor_library import factor_metadata
 from svyable.factor_monitor import load_factor_monitor
@@ -67,6 +68,39 @@ def _strategy_coverage(strategy_usage: pd.DataFrame, catalog: pd.DataFrame) -> p
     return coverage.drop(columns=["factor_names"])
 
 
+def _render_alpha_spotlight(catalog: pd.DataFrame) -> None:
+    st.subheader("Alpha Catalyst cockpit")
+    st.caption(
+        "New alpha-family watchlist: residual Alpha Catalyst plus Tape Acceleration. "
+        "This surface is for factor/strategy review only; candidate selection still happens through the normal board and PM harness."
+    )
+    metrics = alpha_dashboard_metrics(catalog)
+    cols = st.columns(5)
+    cols[0].metric("Alpha factors", metrics["alpha_factor_count"])
+    cols[1].metric("Alpha strategies", metrics["alpha_strategy_count"])
+    cols[2].metric("Shadow factors", metrics["shadow_factors"])
+    cols[3].metric("Proven factors", metrics["proven_factors"])
+    cols[4].metric("Avg shadow ratio", f"{metrics['avg_shadow_ratio']:.0%}")
+
+    strategies = alpha_strategy_cards(catalog)
+    if not strategies.empty:
+        st.markdown("**Alpha strategy cards**")
+        st.dataframe(strategies, use_container_width=True, hide_index=True)
+        chart = strategies.set_index("strategy_id")[["alpha_family_factors", "total_factors", "shadow_factors"]]
+        st.bar_chart(chart, use_container_width=True)
+
+    factors = alpha_factor_table(catalog)
+    if not factors.empty:
+        left, right = st.columns([2, 1])
+        with left:
+            st.markdown("**Alpha factor map**")
+            st.dataframe(factors, use_container_width=True, hide_index=True)
+        with right:
+            counts = factors.groupby(["family", "stage"]).size().unstack(fill_value=0)
+            st.markdown("**Family maturity mix**")
+            st.bar_chart(counts, use_container_width=True)
+
+
 def render_factor_governance(service: DashboardService) -> None:
     monitor = load_factor_monitor(service)
     catalog = _catalog_with_fallback(monitor["catalog"])
@@ -79,6 +113,8 @@ def render_factor_governance(service: DashboardService) -> None:
         "adjusted for uncertainty, hit rate, and coverage. Shadow factors have no floor. "
         "Registry coverage shows which strategies actually depend on each factor, even before factor-health artifacts exist."
     )
+
+    _render_alpha_spotlight(catalog)
 
     if not catalog.empty:
         catalog_view = catalog.copy()
