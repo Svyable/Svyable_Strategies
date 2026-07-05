@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -33,6 +34,46 @@ TERMINAL_ORDER_STATUSES = frozenset(
 ORDER_ACTIONS = frozenset(
     {"buy_to_open", "buy_to_close", "sell_to_open", "sell_to_close"}
 )
+
+_SECRET_KEY_FRAGMENTS = (
+    "token",
+    "secret",
+    "password",
+    "authorization",
+    "session",
+    "credential",
+    "api_key",
+    "apikey",
+)
+_ACCOUNT_KEY_FRAGMENTS = ("account", "account_number", "account-number")
+
+
+def _mask(value: Any, *, keep: int = 4) -> str:
+    text = str(value or "")
+    if not text:
+        return "<empty>"
+    if len(text) <= keep:
+        return "*" * len(text)
+    return f"***{text[-keep:]}"
+
+
+def _redact_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            lower = str(key).lower()
+            if any(fragment in lower for fragment in _SECRET_KEY_FRAGMENTS):
+                out[str(key)] = "<redacted>"
+            elif any(fragment in lower for fragment in _ACCOUNT_KEY_FRAGMENTS):
+                out[str(key)] = _mask(item)
+            else:
+                out[str(key)] = _redact_payload(item)
+        return out
+    if isinstance(value, list):
+        return [_redact_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_payload(item) for item in value)
+    return value
 
 
 @dataclass(frozen=True)
@@ -215,6 +256,10 @@ class TastySdkBroker:
         return self.settings.account_number
 
     @property
+    def masked_account(self) -> str:
+        return _mask(self.settings.account_number)
+
+    @property
     def environment(self) -> str:
         return self.settings.environment
 
@@ -238,11 +283,29 @@ class TastySdkBroker:
             "ts": datetime.now().isoformat(timespec="seconds"),
             "event": event,
             "environment": self.environment,
-            "account": self.account_number,
-            "payload": payload,
+            "account": self.masked_account,
+            "payload": _redact_payload(payload),
         }
+        self._audit_path.touch(exist_ok=True)
+        try:
+            os.chmod(self._audit_path, 0o600)
+        except OSError:
+            pass
         with self._audit_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, default=str, sort_keys=True) + "\n")
+
+    def _require_production_confirmation(self, confirmation: str, *, action: str) -> None:
+        if self.settings.is_test:
+            return
+        if confirmation.strip() != self.settings.account_number:
+            self._audit(
+                f"{action}_blocked",
+                {"reason": "missing_or_invalid_confirmation", "account": self.account_number},
+            )
+            raise RuntimeError(
+                f"Production {action} requires the configured account number "
+                "as the confirmation value."
+            )
 
     # ------------------------------------------------------------------
     # Account and positions
@@ -340,7 +403,7 @@ class TastySdkBroker:
             total_unrealized += unrealized
             total_day += day
         return {
-            "account": self.account_number,
+            "account": self.masked_account,
             "positions": sorted(positions, key=lambda x: -abs(float(x["value"]))),
             "total_position_value": round(total_value, 2),
             "cash_balance": round(float(account.get("cash", 0.0)), 2),
@@ -355,6 +418,8 @@ class TastySdkBroker:
 
     def get_quote(self, symbol: str) -> QuoteSnapshot:
         symbol = symbol.upper().strip()
+        if not symbol:
+            raise ValueError("symbol is required")
 
         async def fetch() -> QuoteSnapshot:
             data = await self.sdk.get_market_data(
@@ -365,7 +430,7 @@ class TastySdkBroker:
         return _run(fetch())
 
     def get_market_snapshot(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
-        clean = sorted({symbol.upper().strip() for symbol in symbols if symbol.strip()})
+        clean = sorted({str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()})
         if not clean:
             return {}
 
@@ -501,7 +566,11 @@ class TastySdkBroker:
     def preflight(self, intent: OrderIntent) -> dict[str, Any]:
         intent = intent.normalized()
         self._audit("order_intent", asdict(intent))
-        result = _run(self._preflight_async(intent))
+        try:
+            result = _run(self._preflight_async(intent))
+        except Exception as exc:
+            self._audit("order_preflight_error", {"intent": asdict(intent), "error": str(exc)})
+            raise
         self._audit("order_preflight", result)
         return result
 
@@ -522,17 +591,13 @@ class TastySdkBroker:
                 "status": "REJECTED_PREFLIGHT",
                 "message": "Broker preflight returned warnings or errors; nothing submitted.",
             }
-        if not self.settings.is_test:
-            if not self.settings.live_enabled:
-                raise RuntimeError(
-                    "Production submission is disabled. Set SVYABLE_ENABLE_LIVE=true "
-                    "only after the production gates are satisfied."
-                )
-            if confirmation.strip() != self.settings.account_number:
-                raise RuntimeError(
-                    "Production submission requires the configured account number "
-                    "as the confirmation value."
-                )
+        if not self.settings.is_test and not self.settings.live_enabled:
+            self._audit("order_submission_blocked", {"reason": "live_not_enabled", "intent": asdict(intent)})
+            raise RuntimeError(
+                "Production submission is disabled. Set SVYABLE_ENABLE_LIVE=true "
+                "only after the production gates are satisfied."
+            )
+        self._require_production_confirmation(confirmation, action="submission")
 
         async def submit() -> dict[str, Any]:
             account = await self._get_account_async()
@@ -564,7 +629,11 @@ class TastySdkBroker:
             }
             return result
 
-        result = _run(submit())
+        try:
+            result = _run(submit())
+        except Exception as exc:
+            self._audit("order_submission_error", {"intent": asdict(intent), "error": str(exc)})
+            raise
         self._audit("order_response", result)
         return result
 
@@ -599,6 +668,10 @@ class TastySdkBroker:
         )
 
     def get_order(self, order_id: int) -> dict[str, Any]:
+        order_id = int(order_id)
+        if order_id <= 0:
+            raise ValueError("order_id must be positive")
+
         async def fetch() -> dict[str, Any]:
             account = await self._get_account_async()
             order = await account.get_order(self.session, order_id)
@@ -613,6 +686,8 @@ class TastySdkBroker:
         status: list[str] | None = None,
         per_page: int = 50,
     ) -> list[dict[str, Any]]:
+        per_page = max(1, min(int(per_page), 250))
+
         async def fetch() -> list[dict[str, Any]]:
             account = await self._get_account_async()
             statuses = None
@@ -635,13 +710,22 @@ class TastySdkBroker:
 
         return _run(fetch())
 
-    def cancel_order(self, order_id: int) -> dict[str, Any]:
+    def cancel_order(self, order_id: int, *, confirmation: str = "") -> dict[str, Any]:
+        order_id = int(order_id)
+        if order_id <= 0:
+            raise ValueError("order_id must be positive")
+        self._require_production_confirmation(confirmation, action="cancel")
+
         async def cancel() -> dict[str, Any]:
             account = await self._get_account_async()
             await account.delete_order(self.session, order_id)
             return {"id": order_id, "status": "Cancel Requested"}
 
-        result = _run(cancel())
+        try:
+            result = _run(cancel())
+        except Exception as exc:
+            self._audit("order_cancel_error", {"id": order_id, "error": str(exc)})
+            raise
         self._audit("order_cancel", result)
         return result
 
@@ -650,6 +734,11 @@ class TastySdkBroker:
     ) -> dict[str, Any]:
         import time
 
+        order_id = int(order_id)
+        if order_id <= 0:
+            raise ValueError("order_id must be positive")
+        timeout_s = max(0.0, float(timeout_s))
+        interval_s = max(0.5, float(interval_s))
         started = time.monotonic()
         while True:
             order = self.get_order(order_id)
@@ -680,7 +769,7 @@ class TastySdkBroker:
             "environment": self.environment,
             "sdk": "tastytrade>=12",
             "session_valid": self.validate_session(),
-            "account": self.account_number,
+            "account": self.masked_account,
             "balances": self.get_account(),
             "positions": self.get_positions_frame(),
             "orders_today": self.search_orders(start_date=today),
