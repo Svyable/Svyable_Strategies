@@ -36,7 +36,7 @@ def _panel() -> Panel:
         },
         index=idx,
     )
-    open_ = close.shift(1).fillna(close) * (1.0 + pd.DataFrame(np.sin(t[:, None] / 17) * 0.003, index=idx, columns=cols))
+    open_ = close.shift(1).fillna(close) * (1.0 + pd.DataFrame(np.sin(t[:, None] / 17) * 0.003 * np.ones(len(cols)), index=idx, columns=cols))
     high = pd.concat([open_, close], axis=0).groupby(level=0).max() * 1.011
     low = pd.concat([open_, close], axis=0).groupby(level=0).min() * 0.989
     volume = pd.DataFrame(

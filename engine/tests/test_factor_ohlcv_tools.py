@@ -22,7 +22,7 @@ def _panel() -> Panel:
     open_ = close.shift(1).fillna(close) * 1.001
     high = pd.concat([open_, close], axis=0).groupby(level=0).max() * 1.01
     low = pd.concat([open_, close], axis=0).groupby(level=0).min() * 0.99
-    volume = pd.DataFrame(1_000_000.0 + t[:, None] * 1000.0, index=idx, columns=cols)
+    volume = pd.DataFrame(1_000_000.0 + t[:, None] * 1000.0 * np.ones(len(cols)), index=idx, columns=cols)
     return Panel(open=open_, high=high, low=low, close=close, volume=volume)
 
 

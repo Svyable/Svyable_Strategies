@@ -37,7 +37,7 @@ def _panel() -> Panel:
         "DDD": 45 + np.maximum(t - 80, 0) * 0.25 + np.sin(t / 6),
         "EEE": 120 + np.where((t % 20) < 10, t * 0.05, -t * 0.02) + np.cos(t / 3),
     }, index=idx)
-    open_ = close.shift(1).fillna(close) * (1.0 + pd.DataFrame(np.sin(t[:, None] / 13) * 0.002, index=idx, columns=cols))
+    open_ = close.shift(1).fillna(close) * (1.0 + pd.DataFrame(np.sin(t[:, None] / 13) * 0.002 * np.ones(len(cols)), index=idx, columns=cols))
     high = pd.concat([open_, close], axis=0).groupby(level=0).max() * 1.012
     low = pd.concat([open_, close], axis=0).groupby(level=0).min() * 0.988
     volume = pd.DataFrame(

@@ -28,7 +28,12 @@ def _cfg():
 
 
 def _weights_hash(w: pd.DataFrame) -> str:
-    arr = np.round(w.to_numpy(dtype=np.float64), 10)
+    # Round to 6 decimals before hashing. Weights sum to ~1 across the book, so
+    # 1e-6 is still a very tight regression gate (real strategy/factor changes
+    # move weights by basis points, 1e-4+), while absorbing sub-1e-6 BLAS/numpy
+    # version float noise so the golden hash is reproducible across environments
+    # (local dev vs. pinned CI) instead of pinned to one interpreter build.
+    arr = np.round(w.to_numpy(dtype=np.float64), 6)
     return hashlib.sha256(arr.tobytes()).hexdigest()[:24]
 
 
