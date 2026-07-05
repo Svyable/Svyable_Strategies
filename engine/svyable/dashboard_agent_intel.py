@@ -9,11 +9,13 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from svyable.agent_chart_model import activation_readiness_rows, candidate_ranking_rows, utility_waterfall_rows
 from svyable.agent_decision_guard import validate_agent_decision, write_guard_report
 from svyable.agent_decision_writer import write_agent_decision_from_context
 from svyable.agent_gui_model import artifact_inventory, issue_summary, recommended_next_step, status_icon, workflow_steps
 from svyable.agent_pm_harness import render_agent_memo, write_agent_pm_pack
 from svyable.agent_review_audit import audit_review_receipt, write_review_audit
+from svyable.agent_review_chain import run_review_chain
 from svyable.agent_review_receipt import write_review_receipt
 from svyable.dashboard_ui import percent
 
@@ -70,6 +72,29 @@ def _status_markdown(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return frame
 
 
+def _render_review_charts(context: dict[str, Any], guard: dict[str, Any], receipt: dict[str, Any], audit: dict[str, Any]) -> None:
+    st.markdown("### PM review visuals")
+    gates = activation_readiness_rows(context, guard, receipt, audit)
+    st.markdown("**Activation readiness gates**")
+    st.dataframe(_status_markdown(gates), use_container_width=True, hide_index=True)
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**Selected-candidate utility decomposition**")
+        waterfall = pd.DataFrame(utility_waterfall_rows(context))
+        if not waterfall.empty:
+            st.bar_chart(waterfall.set_index("component"), use_container_width=True)
+            st.dataframe(waterfall, use_container_width=True, hide_index=True)
+    with right:
+        st.markdown("**Top candidates by utility**")
+        ranking = pd.DataFrame(candidate_ranking_rows(context))
+        if ranking.empty:
+            st.info("No ranked candidate chart data yet.")
+        else:
+            st.bar_chart(ranking.set_index("label")[["utility_bps"]], use_container_width=True)
+            st.dataframe(ranking, use_container_width=True, hide_index=True)
+
+
 def _render_overview(context: dict[str, Any], output_root: str | Path) -> None:
     root = Path(output_root)
     guard = validate_agent_decision(root)
@@ -96,31 +121,44 @@ def _render_overview(context: dict[str, Any], output_root: str | Path) -> None:
             st.warning(item)
 
     st.markdown("### One-click review actions")
-    actions = st.columns(4)
-    if actions[0].button("Regenerate context", type="primary", use_container_width=True):
+    refresh_context = st.checkbox("Refresh context before running the full review chain", value=False)
+    actions = st.columns(5)
+    if actions[0].button("Run review chain", type="primary", use_container_width=True):
+        try:
+            report = run_review_chain(root, refresh_context=refresh_context)
+            if report.get("status") == "PASS":
+                st.success(f"Review chain passed: {report.get('report_path')}")
+            else:
+                st.warning(f"Review chain returned {report.get('status')}: {report.get('report_path')}")
+            st.json(report)
+        except Exception as exc:
+            st.error(str(exc))
+    if actions[1].button("Regenerate context", use_container_width=True):
         try:
             pack = write_agent_pm_pack(root)
             st.success(f"Wrote {pack.memo_path}")
         except Exception as exc:
             st.error(str(exc))
-    if actions[1].button("Write guard", use_container_width=True):
+    if actions[2].button("Write guard", use_container_width=True):
         try:
             report = write_guard_report(root)
             st.success(f"Wrote {report.get('report_path')}")
         except Exception as exc:
             st.error(str(exc))
-    if actions[2].button("Write receipt", use_container_width=True):
+    if actions[3].button("Write receipt", use_container_width=True):
         try:
             receipt = write_review_receipt(root)
             st.success(f"Wrote {receipt.get('receipt_md')}")
         except Exception as exc:
             st.error(str(exc))
-    if actions[3].button("Write audit", use_container_width=True):
+    if actions[4].button("Write audit", use_container_width=True):
         try:
             report = write_review_audit(root)
             st.success(f"Wrote {report.get('report_path')}")
         except Exception as exc:
             st.error(str(exc))
+
+    _render_review_charts(context, guard, receipt, audit)
 
     st.markdown("### Artifact inventory")
     artifacts = pd.DataFrame(artifact_inventory(root))
@@ -153,6 +191,34 @@ def _render_decision_writer(context: dict[str, Any], output_root: str | Path) ->
         "Writes only `strategy_selection/agent_decision.json` using the latest context date/hash. "
         "It cannot write weights, quantities, or orders, and it immediately runs the decision guard."
     )
+    top_col, hold_col = st.columns(2)
+    if top_col.button("Write top eligible decision", type="primary", use_container_width=True):
+        try:
+            result = write_agent_decision_from_context(
+                root,
+                candidate_id=default_candidate,
+                confidence=0.50,
+                reason=explanation.get("summary") or "Human PM selected the top eligible candidate after reviewing the meta harness.",
+                operator="human_pm",
+            )
+            st.success(f"Top eligible decision written: {result.get('decision_path')}")
+            st.json(result)
+        except Exception as exc:
+            st.error(str(exc))
+    if "hold_current" in allowed and hold_col.button("Safe fallback: write hold_current decision", use_container_width=True):
+        try:
+            result = write_agent_decision_from_context(
+                root,
+                candidate_id="hold_current",
+                confidence=0.35,
+                reason="Human PM selected hold_current as a safe fallback after reviewing the current context.",
+                operator="human_pm",
+            )
+            st.success(f"Hold decision written: {result.get('decision_path')}")
+            st.json(result)
+        except Exception as exc:
+            st.error(str(exc))
+
     with st.form("agent_decision_writer_form"):
         candidate = st.selectbox("Allowed candidate", allowed, index=default_index)
         confidence = st.slider("Confidence", 0.0, 1.0, 0.50, 0.01)
@@ -179,21 +245,6 @@ def _render_decision_writer(context: dict[str, Any], output_root: str | Path) ->
             st.json(result)
         except Exception as exc:
             st.error(str(exc))
-
-    if "hold_current" in allowed:
-        if st.button("Safe fallback: write hold_current decision", use_container_width=True):
-            try:
-                result = write_agent_decision_from_context(
-                    root,
-                    candidate_id="hold_current",
-                    confidence=0.35,
-                    reason="Human PM selected hold_current as a safe fallback after reviewing the current context.",
-                    operator="human_pm",
-                )
-                st.success(f"Hold decision written: {result.get('decision_path')}")
-                st.json(result)
-            except Exception as exc:
-                st.error(str(exc))
 
 
 def _render_tree(trace: dict[str, Any]) -> None:
@@ -234,6 +285,7 @@ def _render_weights(trace: dict[str, Any]) -> None:
     st.caption(provenance.get("provenance", "Weights are read from the selected candidate artifact."))
     weights = pd.Series(provenance.get("top_weights", {}), dtype=float)
     if not weights.empty:
+        st.bar_chart(weights.rename("weight"), use_container_width=True)
         st.dataframe(weights.rename("weight").to_frame().style.format({"weight": "{:.2%}"}), use_container_width=True)
 
 
@@ -416,7 +468,7 @@ def _render_context(context: dict[str, Any], output_root: str | Path) -> None:
 
 def render_agent_intel(output_root: str | Path) -> None:
     st.subheader("Selection meta harness")
-    st.caption("Visible selection diagnostics for human review: stepper, guarded decision writer, artifact inventory, legal candidates, regime proxy, score tree, gates, counterfactual alternatives, guard validation, review receipt, integrity audit, and weight provenance.")
+    st.caption("Visible selection diagnostics for human review: stepper, guarded decision writer, review-chain runner, decision charts, artifact inventory, legal candidates, regime proxy, score tree, gates, counterfactual alternatives, guard validation, review receipt, integrity audit, and weight provenance.")
     root = Path(output_root)
     context = _load_latest_context(root)
     if not context:
