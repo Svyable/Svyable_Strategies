@@ -71,6 +71,47 @@ def _render_decision_hero(service: StrategySelectionService, board: pd.DataFrame
         st.caption("No agent rationale recorded yet. Run a candidate evaluation to build a board.")
 
 
+def _render_frontier_coverage(service: StrategySelectionService) -> None:
+    """Show how much of the full strategy registry the current board analyzes.
+
+    A board narrower than the registry is the usual reason only a handful of
+    strategies appear in the analysis charts. Surfacing the gap — and a one-click
+    way to close it — keeps every app surface working against the whole frontier.
+    """
+    try:
+        status = service.frontier_status()
+    except Exception:
+        return
+
+    board_count = status.get("board_candidate_count", 0)
+    expected = status.get("expected_candidate_count", 0)
+    registry_count = status.get("registry_strategy_count", 0)
+    blend_count = status.get("blend_registry_count", 0)
+
+    cols = st.columns(4)
+    cols[0].metric("Board candidates", board_count)
+    cols[1].metric("Enabled frontier", expected, help="Enabled strategies + chimeras + hold_current.")
+    cols[2].metric("Registry strategies", registry_count, help="Every strategy the codebase can evaluate.")
+    cols[3].metric("Chimera blends", blend_count)
+
+    if status.get("is_incomplete_latest_board"):
+        missing = status.get("missing_enabled_strategy_ids", []) + status.get("missing_enabled_blend_ids", [])
+        st.warning(
+            "The latest board analyzes "
+            f"**{board_count} of {expected}** enabled candidates. "
+            + (f"Missing: {', '.join(missing[:12])}{'…' if len(missing) > 12 else ''}. " if missing else "")
+            + "Enable the full registry frontier, then run a fresh evaluation in the control surface."
+        )
+        if st.button("Enable full registry frontier", help="Turn on every default strategy and chimera in the selection policy."):
+            try:
+                path = service.save_full_frontier_policy()
+                st.success(f"Full frontier enabled in policy: {path}. Now run a fresh candidate evaluation in the control surface.")
+            except Exception as exc:
+                st.error(f"Could not enable full frontier: {exc}")
+    else:
+        st.success(f"Board analyzes all {board_count} enabled candidates across the registry frontier.")
+
+
 def render_agent(output_root: str | Path) -> None:
     service = StrategySelectionService(output_root)
     board = service.latest_board()
@@ -103,7 +144,10 @@ def render_agent(output_root: str | Path) -> None:
     except Exception:
         pass
 
+    held_strategy = service.state().get("selected_strategy_id")
+
     with board_tab:
+        _render_frontier_coverage(service)
         left, right = st.columns(2)
         with left:
             if "utility_bps" in board.columns:
@@ -113,7 +157,13 @@ def render_agent(output_root: str | Path) -> None:
             if alpha_col in board.columns:
                 render_figure(charts.candidate_ranking_chart(board, alpha_col, title="Net expected alpha (bps)"))
         if {"one_way_turnover", "expected_alpha_bps"} <= set(board.columns):
-            render_figure(charts.alpha_vs_cost_scatter(board))
+            render_figure(charts.alpha_vs_cost_scatter(board, highlight=held_strategy))
+            st.caption(
+                "Every candidate on the board is plotted — colored by family, sized by "
+                "cost-aware utility, hollow when ineligible, gold-ringed when held. "
+                "Points cluster because most books share a low-turnover / small-alpha "
+                "regime; the color legend keeps all of them distinguishable."
+            )
 
     with compare_tab:
         if len(curves) >= 2:

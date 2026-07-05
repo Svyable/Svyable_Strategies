@@ -127,6 +127,64 @@ def test_multi_equity_chart_skips_empty(returns):
     assert isinstance(charts.multi_equity_chart(curves, highlight="a"), Figure)
 
 
+def _full_frontier_board(n: int = 20) -> pd.DataFrame:
+    families = ["momentum", "reversal", "defensive", "flow", "behavioral", "trend"]
+    return pd.DataFrame(
+        {
+            "candidate_id": ["hold_current"] + [f"q23_s{i}" for i in range(1, n)],
+            "family": ["no-trade baseline"] + [families[i % len(families)] for i in range(1, n)],
+            "one_way_turnover": [0.0] + [0.05 + 0.005 * i for i in range(1, n)],
+            "expected_alpha_bps": [0.0] + [2.0 + 0.2 * i for i in range(1, n)],
+            "net_expected_alpha_bps": [0.0] + [1.0 + 0.2 * i for i in range(1, n)],
+            "utility_bps": [0.0] + [-40.0 + 2.0 * i for i in range(1, n)],
+            "eligible": [True] + [bool(i % 4) for i in range(1, n)],
+        }
+    )
+
+
+def test_categorical_colors_are_stable_and_distinct():
+    labels = ["momentum", "reversal", "defensive", "reversal"]
+    first = charts.categorical_colors(labels)
+    second = charts.categorical_colors(list(reversed(labels)))
+    assert first == second  # deterministic regardless of input order
+    assert len(first) == 3  # one color per distinct label
+    assert len(set(first.values())) == 3  # colors are distinct
+
+
+def test_categorical_colors_scale_past_twenty():
+    labels = [f"strat_{i}" for i in range(30)]
+    colors = charts.categorical_colors(labels)
+    assert len(colors) == 30
+    assert len(set(colors.values())) >= 25  # continuous colormap keeps them distinct
+
+
+def test_alpha_vs_cost_scatter_plots_every_candidate():
+    board = _full_frontier_board(20)
+    fig = charts.alpha_vs_cost_scatter(board, highlight="q23_s3")
+    plotted = sum(len(coll.get_offsets()) for coll in fig.axes[0].collections)
+    # Every one of the 20 candidates is drawn (plus a highlight ring for the held one).
+    assert plotted >= 20
+
+
+def test_alpha_vs_cost_scatter_handles_empty_board():
+    assert isinstance(charts.alpha_vs_cost_scatter(pd.DataFrame()), Figure)
+
+
+def test_alpha_vs_cost_scatter_coerces_non_finite_coordinates():
+    board = _full_frontier_board(6)
+    board.loc[2, "one_way_turnover"] = None
+    board.loc[3, "expected_alpha_bps"] = float("nan")
+    fig = charts.alpha_vs_cost_scatter(board)
+    plotted = sum(len(coll.get_offsets()) for coll in fig.axes[0].collections)
+    assert plotted >= 6  # no candidate silently dropped for a missing coordinate
+
+
+def test_candidate_ranking_chart_draws_a_bar_per_candidate():
+    board = _full_frontier_board(20)
+    fig = charts.candidate_ranking_chart(board, "utility_bps")
+    assert len(fig.axes[0].patches) == 20
+
+
 def test_candidate_returns_loads_from_output_dir(tmp_path, returns):
     root = tmp_path / "outputs"
     run = root / "candidate_q23_a" / "20260101_000000"

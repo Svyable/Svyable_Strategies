@@ -17,6 +17,7 @@ from typing import Sequence
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.colors  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -28,7 +29,37 @@ BENCHMARK = "#e74c3c"
 ACCENT = "#3498db"
 MUTED = "#95a5a6"
 PANEL = "#0E1117"
+HELD = "#f1c40f"  # gold ring for the currently-held candidate
 _SERIES_COLORS = ["#2ecc71", "#3498db", "#f39c12", "#9b59b6", "#e74c3c", "#1abc9c"]
+
+
+def categorical_colors(labels: Sequence[object]) -> dict[str, str]:
+    """Return a stable, high-contrast color for every distinct label.
+
+    Colors are assigned deterministically over the *sorted* set of unique
+    labels so the same strategy/family keeps its color across every chart in the
+    console. The palette scales past the 20-swatch qualitative maps by sampling
+    a continuous colormap, so a full 20-strategy registry — or more — always
+    gets visually distinct points instead of collapsing into a few colors.
+    """
+    unique = sorted({str(label) for label in labels})
+    n = len(unique)
+    if n == 0:
+        return {}
+    if n <= 10:
+        cmap = plt.get_cmap("tab10")
+        picks = [cmap(i) for i in range(n)]
+    elif n <= 20:
+        cmap = plt.get_cmap("tab20")
+        picks = [cmap(i) for i in range(n)]
+    else:
+        cmap = plt.get_cmap("hsv")
+        picks = [cmap(i / n) for i in range(n)]
+    return {label: matplotlib.colors.to_hex(color) for label, color in zip(unique, picks)}
+
+
+def _series_color(index: int) -> str:
+    return _SERIES_COLORS[index % len(_SERIES_COLORS)]
 
 
 def setup_plot_style() -> None:
@@ -312,26 +343,56 @@ def candidate_ranking_chart(
     label_col: str = "candidate_id",
     eligible_col: str = "eligible",
     title: str = "Candidate ranking",
-    figsize: tuple[int, int] = (12, 5),
+    figsize: tuple[int, int] = (12, 6),
+    *,
+    color_by: str = "family",
 ) -> Figure:
-    """Horizontal bars of a per-candidate score, green when eligible, grey when not."""
+    """Horizontal bars of a per-candidate score across the whole board.
+
+    Bars are colored by strategy ``color_by`` (family by default) so every
+    candidate in the registry is visually distinct; ineligible candidates keep
+    their family color but are drawn hollow with a hatch so eligibility still
+    reads at a glance.
+    """
     setup_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
 
-    frame = board[[label_col, value_col]].copy()
+    columns = [label_col, value_col]
+    if color_by in board.columns:
+        columns.append(color_by)
+    frame = board[columns].copy()
     if eligible_col in board.columns:
         frame[eligible_col] = board[eligible_col].astype(bool).values
     else:
         frame[eligible_col] = True
     frame = frame.dropna(subset=[value_col]).sort_values(value_col)
 
-    colors = [STRATEGY if ok else MUTED for ok in frame[eligible_col]]
-    ax.barh(frame[label_col].astype(str), frame[value_col].astype(float), color=colors)
+    if color_by in frame.columns and frame[color_by].notna().any():
+        category = frame[color_by].fillna("—").astype(str)
+    else:
+        category = frame[label_col].astype(str)
+    color_map = categorical_colors(category.tolist())
+
+    positions = range(len(frame))
+    for pos, (idx, value) in zip(positions, frame[value_col].astype(float).items()):
+        color = color_map.get(str(category.loc[idx]), STRATEGY)
+        eligible = bool(frame[eligible_col].loc[idx])
+        ax.barh(
+            pos,
+            value,
+            color=color if eligible else "none",
+            edgecolor=color,
+            linewidth=1.4,
+            hatch=None if eligible else "///",
+            alpha=0.95 if eligible else 0.85,
+        )
+        ax.text(value, pos, f" {value:.1f}", va="center", ha="left" if value >= 0 else "right", fontsize=8)
+
+    ax.set_yticks(list(positions))
+    ax.set_yticklabels(frame[label_col].astype(str))
     ax.axvline(x=0, color="white", linestyle="--", alpha=0.4, linewidth=1)
     ax.set_title(title, fontsize=14, fontweight="bold", pad=16)
     ax.set_xlabel(value_col.replace("_", " ").title())
-    for i, value in enumerate(frame[value_col].astype(float)):
-        ax.text(value, i, f" {value:.1f}", va="center", ha="left" if value >= 0 else "right", fontsize=8)
     ax.grid(True, axis="x", alpha=0.2)
     fig.tight_layout()
     return fig
@@ -478,32 +539,108 @@ def sleeve_trust_area_chart(
 def alpha_vs_cost_scatter(
     board: pd.DataFrame,
     title: str = "Expected alpha vs. turnover cost",
-    figsize: tuple[int, int] = (10, 5),
+    figsize: tuple[int, int] = (11, 6),
+    *,
+    color_by: str = "family",
+    highlight: str | None = None,
 ) -> Figure:
-    """Scatter of gross expected alpha against one-way turnover, sized by utility."""
+    """Scatter of gross expected alpha against one-way turnover for the whole board.
+
+    Every candidate on the board is drawn as its own point, colored by
+    ``color_by`` (defaults to strategy family, falling back to ``candidate_id``)
+    so a full 20-strategy frontier stays legible instead of collapsing into a
+    single green cluster. Marker size scales with cost-aware utility, eligible
+    candidates are filled while ineligible ones are hollow, and the currently
+    held candidate gets a gold ring. Non-finite coordinates are coerced to zero
+    so no candidate is silently dropped from the chart.
+    """
     setup_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
 
     frame = board.copy()
-    x = frame.get("one_way_turnover", pd.Series(dtype=float)).astype(float)
-    y = frame.get("expected_alpha_bps", pd.Series(dtype=float)).astype(float)
-    eligible = frame.get("eligible", pd.Series(True, index=frame.index)).astype(bool)
-    colors = [STRATEGY if ok else MUTED for ok in eligible]
+    if frame.empty:
+        ax.text(0.5, 0.5, "No candidates on the board yet", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(title, fontsize=14, fontweight="bold", pad=16)
+        return fig
 
-    ax.scatter(x, y, s=90, c=colors, edgecolor=PANEL, alpha=0.9, zorder=3)
-    for _, row in frame.iterrows():
-        ax.annotate(
-            str(row.get("candidate_id", "")),
-            (float(row.get("one_way_turnover", 0.0)), float(row.get("expected_alpha_bps", 0.0))),
-            fontsize=7,
-            xytext=(4, 4),
-            textcoords="offset points",
+    x = pd.to_numeric(frame.get("one_way_turnover"), errors="coerce").fillna(0.0)
+    y = pd.to_numeric(frame.get("expected_alpha_bps"), errors="coerce").fillna(0.0)
+    utility = pd.to_numeric(frame.get("utility_bps"), errors="coerce").fillna(0.0)
+    eligible = frame.get("eligible", pd.Series(True, index=frame.index)).astype(bool)
+    ids = frame.get("candidate_id", pd.Series(frame.index.astype(str))).astype(str)
+
+    # Choose a categorical dimension for color; family gives a readable legend,
+    # but fall back to per-candidate coloring when family is unavailable.
+    if color_by in frame.columns and frame[color_by].notna().any():
+        categories = frame[color_by].fillna("—").astype(str)
+        legend_title = color_by.replace("_", " ").title()
+    else:
+        categories = ids
+        legend_title = "Candidate"
+    color_map = categorical_colors(categories.tolist())
+
+    # Marker size scales with utility magnitude so the trade-off the agent
+    # optimizes is visible at a glance, with a floor so every point is clickable.
+    util_span = float(utility.abs().max()) or 1.0
+    sizes = 70.0 + 260.0 * (utility.abs() / util_span)
+
+    for idx in frame.index:
+        color = color_map.get(str(categories.loc[idx]), MUTED)
+        is_eligible = bool(eligible.loc[idx])
+        ax.scatter(
+            float(x.loc[idx]),
+            float(y.loc[idx]),
+            s=float(sizes.loc[idx]),
+            facecolor=color if is_eligible else "none",
+            edgecolor=color,
+            linewidths=1.8,
+            alpha=0.92 if is_eligible else 0.85,
+            zorder=3,
         )
+        if highlight is not None and str(ids.loc[idx]) == str(highlight):
+            ax.scatter(
+                float(x.loc[idx]),
+                float(y.loc[idx]),
+                s=float(sizes.loc[idx]) + 190.0,
+                facecolor="none",
+                edgecolor=HELD,
+                linewidths=2.4,
+                zorder=4,
+            )
+        ax.annotate(
+            str(ids.loc[idx]),
+            (float(x.loc[idx]), float(y.loc[idx])),
+            fontsize=7,
+            color="#D6D6D6",
+            xytext=(5, 4),
+            textcoords="offset points",
+            zorder=5,
+        )
+
+    ax.axhline(y=0, color="white", linestyle="--", alpha=0.25, linewidth=1)
     ax.set_title(title, fontsize=14, fontweight="bold", pad=16)
     ax.set_xlabel("One-way turnover")
     ax.set_ylabel("Expected alpha (bps)")
     ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
     ax.grid(True, alpha=0.2)
+
+    # Legend: one entry per color category plus the eligibility / held encoding.
+    handles = [
+        plt.Line2D([0], [0], marker="o", linestyle="", markerfacecolor=color, markeredgecolor=color, markersize=8, label=label)
+        for label, color in color_map.items()
+    ]
+    handles.append(plt.Line2D([0], [0], marker="o", linestyle="", markerfacecolor="none", markeredgecolor=MUTED, markersize=8, label="ineligible (hollow)"))
+    if highlight is not None:
+        handles.append(plt.Line2D([0], [0], marker="o", linestyle="", markerfacecolor="none", markeredgecolor=HELD, markersize=10, markeredgewidth=2.0, label="held (gold ring)"))
+    ax.legend(
+        handles=handles,
+        title=legend_title,
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        framealpha=0.9,
+        fontsize=7,
+        title_fontsize=8,
+    )
     fig.tight_layout()
     return fig
 
@@ -518,7 +655,8 @@ def multi_equity_chart(
     setup_plot_style()
     fig, ax = plt.subplots(figsize=figsize)
 
-    for i, (name, returns) in enumerate(sorted(curves.items())):
+    color_map = categorical_colors(list(curves.keys()))
+    for name, returns in sorted(curves.items()):
         if returns is None or returns.empty:
             continue
         perf = (1.0 + returns).cumprod() - 1.0
@@ -527,9 +665,9 @@ def multi_equity_chart(
             perf.index,
             perf.values,
             label=name,
-            linewidth=3 if is_focus else 1.6,
-            color=STRATEGY if is_focus else _SERIES_COLORS[i % len(_SERIES_COLORS)],
-            alpha=1.0 if is_focus else 0.75,
+            linewidth=3.2 if is_focus else 1.6,
+            color=STRATEGY if is_focus else color_map.get(str(name), ACCENT),
+            alpha=1.0 if is_focus else 0.8,
             zorder=5 if is_focus else 2,
         )
     ax.axhline(y=0, color="white", linestyle="--", alpha=0.3, linewidth=1)
