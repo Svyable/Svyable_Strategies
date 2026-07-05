@@ -37,7 +37,7 @@ Implemented:
 - Deterministic, manual, and two-phase agent selection with immutable candidate hashes and explicit user approval.
 - Institutional scorecards covering alpha, beta, capture, tails, risk, turnover, costs, and beta-adjusted residual return.
 - Streamlit PM Command Center, Agent Lab, Selection Meta Harness, Analytics/Arcana, Factor Governance, Factor Health, Portfolio Ops, and audit surfaces.
-- Community SDK adapter with sandbox preflight, polling, cancellation, fills, slippage, delayed-fill recovery, reconciliation, and audit.
+- Tastytrade SDK order adapter with typed order intents, sandbox preflight, production submission/cancel confirmation gates, explicit open/close actions, redacted audit logging, polling, reconciliation handoff, and ledger-backed execution health. Delayed-fill recovery and slippage analytics live in the execution quality/backfill modules.
 
 Not true yet:
 
@@ -302,8 +302,8 @@ svyable-strategy-activate --out outputs
 | GUI surfaces | `dashboard_factor_governance.py`, `alpha_gui_model.py`, `dashboard_agent_intel.py`, `agent_chart_model.py`, `agent_gui_model.py`, `pages/8_Agent_Meta_Harness.py` |
 | Agent PM harness | `agent_pm_harness.py`, `agent_decision_writer.py`, `agent_decision_guard.py`, `agent_review_receipt.py`, `agent_review_audit.py`, `agent_review_chain.py`, `strategy_activate.py` |
 | Operations | `dashboard_command_center.py`, `dashboard_portfolio_ops.py`, `dashboard_readiness.py`, `dashboard_live_market.py` |
-| Execution/audit | `rebalancer.py`, `execution_control.py`, `submission_guard.py`, adapter modules, `ledger.py` |
-| Tests | `engine/tests/test_agent_pm_harness.py`, `test_agent_meta_trace.py`, `test_selection_explain.py`, `test_agent_decision_guard.py`, `test_agent_decision_writer.py`, `test_agent_review_receipt.py`, `test_agent_review_audit.py`, `test_agent_review_chain.py`, `test_agent_chart_model.py`, `test_alpha_gui_model.py`, `test_alpha_catalyst_strategy.py`, `test_tape_acceleration_alpha.py`, `test_strategy_lifecycle.py`, `test_strategy_registry_quality.py`, GUI/factor/strategy/readiness tests |
+| Execution/audit | `rebalancer.py`, `execution_control.py`, `submission_guard.py`, `tastytrade_sdk.py`, legacy REST data/session support in `tastytrade.py`, `ledger.py` |
+| Tests | Core regression and smoke tests plus safety tests for SDK preflight/audit gates (`test_tastytrade_sdk_preflight.py`), broker long-only behavior (`test_broker_safety.py`), rebalancer execution policy (`test_rebalancer_execution_policy.py`), ledger execution status (`test_ledger_execution_status.py`), execution artifacts, fill quality, delayed-fill recovery, strategy selection, agent PM rails, GUI models, factor governance, and strategy readiness. |
 
 ## Safety and truthfulness
 
