@@ -33,6 +33,50 @@ def _ledger(args):
     return Ledger(Path(args.out) / "ledger.db")
 
 
+def _tasty_sdk_broker(*, require_credentials: bool = True):
+    from svyable.broker_settings import TastySettings
+    from svyable.tastytrade_sdk import TastySdkBroker
+
+    settings = TastySettings.from_env(require_credentials=require_credentials)
+    if require_credentials:
+        return TastySdkBroker(settings=settings)
+    if settings.client_secret and settings.refresh_token and settings.account_number:
+        return TastySdkBroker(settings=settings)
+    return None
+
+
+def _execution_inputs(run_dir: Path, provider, args, cfg):
+    import pandas as pd
+
+    path = run_dir / "execution_inputs.csv"
+    if path.exists():
+        data = pd.read_csv(path, index_col=0)
+        prices = data.get("price", pd.Series(dtype=float)).dropna().astype(float).to_dict()
+        adv = data.get("adv_dollars", pd.Series(dtype=float)).dropna().astype(float).to_dict()
+        date = None
+        meta_path = run_dir / "meta.json"
+        if meta_path.exists():
+            try:
+                date = json.loads(meta_path.read_text()).get("execution_inputs", {}).get("date")
+            except Exception:  # noqa: BLE001
+                date = None
+        return prices, adv, date
+
+    panel = provider.get_panel(start=args.start)
+    prices = panel.close.iloc[-1].dropna().to_dict()
+    adv = panel.adv(cfg.adv_win).iloc[-1].dropna().to_dict()
+    return prices, adv, str(panel.close.index[-1].date())
+
+
+def _run_status_from_execution(status: str, dry_run: bool) -> str:
+    status = str(status or "ok").lower()
+    if dry_run and status in {"planned", "dry_run"}:
+        return "ok"
+    if status in {"failed", "degraded"}:
+        return status
+    return "ok"
+
+
 def cmd_fetch(args) -> int:
     info = _provider(args).refresh(start=args.start)
     print(json.dumps(info, indent=2))
@@ -67,23 +111,17 @@ def cmd_daily(args) -> int:
     panel = prov.get_panel(start=args.start)
     report = panel.validate()
 
-    # calendar-aware staleness: pre-open, data must reach the last trading close
     want = expected_last_close(date.today())
     have = panel.close.index[-1].date()
     if have < want:
         report["status"] = "degraded"
         report.setdefault("issues", []).append(f"stale: have {have}, expected {want}")
 
-    # cross-provider close check: compare panel closes vs an independent
-    # tastytrade snapshot; >25bps median divergence on liquid names = bad feed
     try:
-        import os as _os
-        if (_os.environ.get("TT_REFRESH_TOKEN") or _os.environ.get("TT_USERNAME")):
-            from svyable.tastytrade import TastytradeBroker
-            b = TastytradeBroker(env=args.env,
-                                 allow_production=(args.env == "production"))
+        broker = _tasty_sdk_broker(require_credentials=False)
+        if broker is not None:
             sample = list(panel.close.iloc[-1].dropna().sort_values().index[-25:])
-            snap = b.get_market_snapshot(sample)
+            snap = broker.get_market_snapshot(sample)
             diffs = []
             for sym in sample:
                 ref = (snap.get(sym) or {}).get("prev_close") or \
@@ -115,7 +153,6 @@ def cmd_daily(args) -> int:
     cfg = nasdaq_lo_config()
     res = run_pipeline(panel, cfg, output_root=args.out, write_artifacts=True)
 
-    # shadow NAV for live-vs-shadow drift tracking
     shadow_nav = float((1.0 + res.pnl["net_ret"].fillna(0.0)).cumprod().iloc[-1])
     led.record_equity(str(have), shadow_nav=shadow_nav)
     led.record_run(
@@ -134,7 +171,7 @@ def cmd_daily(args) -> int:
           f"positions: {int((res.weights.iloc[-1] > 0).sum())}")
     print(f"morning report: {res.output_dir / 'morning_report.md'}")
 
-    try:                                       # regenerate the dashboard every run
+    try:
         from svyable.dashboard import generate
         print(f"dashboard: {generate(args.out, env=args.env)}")
     except Exception as e:  # noqa: BLE001 — dashboard is never worth failing a run
@@ -196,28 +233,26 @@ def cmd_rebalance(args) -> int:
     cfg = nasdaq_lo_config()
     strat_dir = Path(args.out) / cfg.strategy_id
 
-    # latest weights_today.csv
     runs = sorted(d for d in strat_dir.iterdir()
                   if d.is_dir() and (d / "weights_today.csv").exists())
     if not runs:
         print("no weights found — run `svyable daily` first", file=sys.stderr)
         return 2
-    wt = pd.read_csv(runs[-1] / "weights_today.csv", index_col=0)["weight"]
-    print(f"using weights from {runs[-1].name} ({len(wt)} positions)")
+    latest_run = runs[-1]
+    wt = pd.read_csv(latest_run / "weights_today.csv", index_col=0)["weight"]
+    print(f"using weights from {latest_run.name} ({len(wt)} positions)")
 
-    panel = _provider(args).get_panel(start=args.start)
-    prices = panel.close.iloc[-1].dropna().to_dict()
-    adv = panel.adv(cfg.adv_win).iloc[-1].dropna().to_dict()
+    prov = _provider(args)
+    prices, adv, input_date = _execution_inputs(latest_run, prov, args, cfg)
 
     if args.broker == "tasty":
-        from svyable.tastytrade import TastytradeBroker
-        broker = TastytradeBroker()                # sandbox unless TT_ENV+allow_production
-        try:                                       # live quotes beat yesterday's close
+        broker = _tasty_sdk_broker(require_credentials=True)
+        try:
             live = broker.execution_prices(sorted(set(wt.index) | set(broker.get_positions())))
             prices.update(live)
-            print(f"live execution prices for {len(live)} symbols (tastytrade snapshot)")
+            print(f"live execution prices for {len(live)} symbols (tastytrade sdk snapshot)")
         except Exception as e:  # noqa: BLE001 — stale closes are an acceptable fallback
-            print(f"WARNING: live quote snapshot failed ({e}); using panel closes",
+            print(f"WARNING: live quote snapshot failed ({e}); using execution inputs",
                   file=sys.stderr)
     else:
         broker = LocalPaperBroker(strat_dir / "paper_account.json",
@@ -229,29 +264,62 @@ def cmd_rebalance(args) -> int:
     orders = plan_orders(wt, acct["equity"], prices, positions, cfg, adv=adv)
 
     for o in orders:
-        print(f"  {o.side.upper():4} {o.qty:>6} {o.symbol:<6} ~${o.est_notional:>10,.0f}  ({o.reason})")
+        print(f"  {o.side.upper():4} {o.qty:>6} {o.symbol:<6} ~${o.est_notional:>10,.0f}  "
+              f"({o.reason}; {o.order_action})")
     print(f"{len(orders)} orders | equity ${acct['equity']:,.0f}")
 
-    rec = execute_plan(orders, broker, strat_dir / "orders", dry_run=not args.execute)
-    print(f"{'DRY RUN — nothing submitted' if not args.execute else 'SUBMITTED'} "
+    rec = execute_plan(
+        orders,
+        broker,
+        strat_dir / "orders",
+        dry_run=not args.execute,
+        fail_fast=not args.continue_on_error,
+        confirmation=args.confirmation,
+    )
+    print(f"{'DRY RUN — nothing submitted' if not args.execute else rec['status'].upper()} "
           f"| log: {rec['log_file']}")
 
+    rc = None
+    ledger_status = _run_status_from_execution(rec.get("status"), not args.execute)
+    if args.execute:
+        eq = broker.get_account()["equity"]
+        broker_positions = broker.get_positions()
+        if input_date:
+            led_date = input_date
+        else:
+            led_date = ""
+        rc = reconcile(wt, eq, prices, broker_positions)
+        print(f"reconcile: {rc['status']} ({len(rc['drifts'])} drifts)")
+        if rc["status"] != "ok" and ledger_status != "failed":
+            ledger_status = "degraded"
+
     led = _ledger(args)
-    run_id = led.record_run(kind="rebalance", strategy=cfg.strategy_id,
-                            status="ok", metrics={"orders": len(orders),
-                                                  "dry_run": not args.execute,
-                                                  "broker": args.broker})
+    run_id = led.record_run(
+        kind="rebalance",
+        strategy=cfg.strategy_id,
+        status=ledger_status,
+        metrics={
+            "orders": len(orders),
+            "dry_run": not args.execute,
+            "broker": args.broker,
+            "execution_status": rec.get("status"),
+            "aborted": rec.get("aborted"),
+            "errors": rec.get("errors", []),
+            "reconciliation": rc,
+            "execution_inputs_date": input_date,
+        },
+    )
     led.record_orders(run_id, args.broker, not args.execute,
                       rec["planned"], rec.get("results", []))
 
     if args.execute:
         eq = broker.get_account()["equity"]
-        led.record_equity(str(panel.close.index[-1].date()), paper_equity=eq)
-        rc = reconcile(wt, eq, prices, broker.get_positions())
-        print(f"reconcile: {rc['status']} ({len(rc['drifts'])} drifts)")
-        if rc["status"] != "ok":
+        if input_date:
+            led.record_equity(input_date, paper_equity=eq)
+        if rc and rc["status"] != "ok":
             led.record_event("warning", "reconcile", json.dumps(rc["drifts"]))
-    return 0
+            led.update_run_status(run_id, "degraded")
+    return 2 if args.execute and ledger_status != "ok" else 0
 
 
 def cmd_health(args) -> int:
@@ -284,25 +352,32 @@ def cmd_auth(args) -> int:
 
 
 def cmd_tasty(args) -> int:
-    from svyable.tastytrade import TastytradeBroker
-    b = TastytradeBroker()   # sandbox by default; production needs code-level opt-in
+    from svyable.tastytrade_sdk import OrderIntent
+
+    b = _tasty_sdk_broker(require_credentials=True)
 
     if args.action == "status":
         print(json.dumps(b.status_snapshot(), indent=2, default=str))
     elif args.action == "orders":
         for o in b.search_orders(start_date=args.date):
-            print(f"  #{o.get('id')} {o.get('status'):<16} {o.get('order-type'):<7} "
-                  f"{o.get('underlying-symbol', ''):<6} size={o.get('size')}")
+            print(f"  #{o.get('id')} {o.get('status'):<16} {o.get('order_type'):<7} "
+                  f"{o.get('underlying_symbol', ''):<6} size={o.get('size')}")
     elif args.action == "cancel":
         if args.id is None:
             print("--id required", file=sys.stderr)
             return 2
         print(json.dumps(b.cancel_order(args.id), indent=2))
     elif args.action == "dry-run":
-        order = b.build_equity_order(args.symbol, args.qty, args.side,
-                                     order_type="limit" if args.price else "market",
-                                     price=args.price)
-        print(json.dumps({"order": order, "result": b.dry_run(order)}, indent=2))
+        intent = OrderIntent(
+            args.symbol,
+            args.side,
+            args.qty,
+            "limit" if args.price else "market",
+            "day",
+            args.price,
+            True,
+        )
+        print(json.dumps(b.submit_intent(intent), indent=2, default=str))
     elif args.action == "quotes":
         syms = (args.symbols or args.symbol).replace(" ", "").split(",")
         print(json.dumps(b.get_market_snapshot(syms), indent=2))
@@ -318,12 +393,12 @@ def cmd_tasty(args) -> int:
 
 
 def cmd_universe(args) -> int:
-    from svyable.tastytrade import TastytradeBroker
+    from svyable.tastytrade import TastytradeClient
     from svyable.universe import take_snapshot, build_membership, write_symbols_file
 
-    b = TastytradeBroker()
+    c = TastytradeClient(env=args.env, allow_production=(args.env == "production"))
     snap_dir = Path(args.out) / "universe" / "snapshots"
-    info = take_snapshot(b, snap_dir, listed_market=args.exchange)
+    info = take_snapshot(c, snap_dir, listed_market=args.exchange)
     print(f"snapshot: {info}")
 
     mem = build_membership(snap_dir)
@@ -359,12 +434,14 @@ def _apply_env(args) -> None:
     import os
     if args.env == "production":
         os.environ["TT_ENV"] = "production"
+        os.environ["SVYABLE_ENV"] = "production"
         if args.out == str(ROOT / "outputs"):
             args.out = str(ROOT / "outputs-production")
         if args.cache == str(ROOT / "data-cache"):
             args.cache = str(ROOT / "data-cache-production")
     else:
         os.environ.setdefault("TT_ENV", "sandbox")
+        os.environ.setdefault("SVYABLE_ENV", "sandbox")
 
 
 def cmd_session(args) -> int:
@@ -390,13 +467,11 @@ def cmd_session(args) -> int:
         except Exception as e:  # noqa: BLE001 — needs full customer account
             out["quote_token"] = f"unavailable: {e}"
         try:
-            from svyable.tastytrade import TastytradeBroker
-            b = TastytradeBroker(env=args.env,
-                                 allow_production=(args.env == "production"),
-                                 client=c)
-            out["account"] = b.get_account()
+            b = _tasty_sdk_broker(require_credentials=False)
+            if b is not None:
+                out["account"] = b.get_account()
             out["universe_snapshot"] = take_snapshot(
-                b, Path(args.out) / "universe" / "snapshots")
+                c, Path(args.out) / "universe" / "snapshots")
         except Exception as e:  # noqa: BLE001
             out["account"] = f"unavailable: {e}"
         led.record_run(kind="session", strategy="warmup", status="ok", metrics=out)
@@ -454,7 +529,11 @@ def main(argv=None) -> int:
     rb.add_argument("--equity", type=float, default=100_000.0,
                     help="starting cash for a fresh local paper account")
     rb.add_argument("--execute", action="store_true",
-                    help="actually submit orders (default: dry run)")
+                    help="run broker-side execution path (default: dry run)")
+    rb.add_argument("--confirmation", default="",
+                    help="configured account number required for production tasty execution")
+    rb.add_argument("--continue-on-error", action="store_true",
+                    help="attempt later legs after one leg fails; status still becomes degraded")
 
     sub.add_parser("smoke")
     sub.add_parser("health")
