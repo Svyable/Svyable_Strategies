@@ -11,14 +11,16 @@ from typing import Any
 import pandas as pd
 
 from svyable.strategy_alpha_catalyst import ALPHA_CATALYST
+from svyable.strategy_leadership_quality import LEADERSHIP_QUALITY
 from svyable.strategy_registry import get_strategy
 from svyable.strategy_tape_acceleration import TAPE_ACCELERATION
 
 
-ALPHA_STRATEGY_IDS = ("svyable_alpha_catalyst", "svyable_tape_acceleration")
+ALPHA_STRATEGY_IDS = ("svyable_alpha_catalyst", "svyable_tape_acceleration", "svyable_leadership_quality")
 ALPHA_FAMILIES = {
     **{name: "Alpha Catalyst" for name in ALPHA_CATALYST},
     **{name: "Tape Acceleration" for name in TAPE_ACCELERATION},
+    **{name: "Leadership Quality" for name in LEADERSHIP_QUALITY},
 }
 
 
@@ -35,7 +37,7 @@ def _catalog_value(catalog: pd.DataFrame, factor: str, column: str, default: Any
 
 
 def alpha_factor_table(catalog: pd.DataFrame) -> pd.DataFrame:
-    """Return Alpha Catalyst + Tape Acceleration factor metadata rows."""
+    """Return newest factor-family metadata rows."""
     rows: list[dict[str, Any]] = []
     for factor, family in ALPHA_FAMILIES.items():
         rows.append({
@@ -50,7 +52,7 @@ def alpha_factor_table(catalog: pd.DataFrame) -> pd.DataFrame:
 
 
 def alpha_strategy_cards(catalog: pd.DataFrame) -> pd.DataFrame:
-    """Return compact summary cards for the two newest alpha books."""
+    """Return compact summary cards for the newest books."""
     stage_lookup = catalog["stage"].to_dict() if catalog is not None and not catalog.empty and "stage" in catalog.columns else {}
     rows: list[dict[str, Any]] = []
     for strategy_id in ALPHA_STRATEGY_IDS:
@@ -79,7 +81,7 @@ def alpha_strategy_cards(catalog: pd.DataFrame) -> pd.DataFrame:
 
 
 def alpha_dashboard_metrics(catalog: pd.DataFrame) -> dict[str, Any]:
-    """Return headline metrics for the alpha GUI spotlight."""
+    """Return headline metrics for the GUI spotlight."""
     table = alpha_factor_table(catalog)
     stages = table["stage"].value_counts().to_dict() if not table.empty else {}
     strategies = alpha_strategy_cards(catalog)
