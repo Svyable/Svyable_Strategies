@@ -284,10 +284,6 @@ def cmd_rebalance(args) -> int:
     if args.execute:
         eq = broker.get_account()["equity"]
         broker_positions = broker.get_positions()
-        if input_date:
-            led_date = input_date
-        else:
-            led_date = ""
         rc = reconcile(wt, eq, prices, broker_positions)
         print(f"reconcile: {rc['status']} ({len(rc['drifts'])} drifts)")
         if rc["status"] != "ok" and ledger_status != "failed":
@@ -366,7 +362,7 @@ def cmd_tasty(args) -> int:
         if args.id is None:
             print("--id required", file=sys.stderr)
             return 2
-        print(json.dumps(b.cancel_order(args.id), indent=2))
+        print(json.dumps(b.cancel_order(args.id, confirmation=args.confirmation), indent=2))
     elif args.action == "dry-run":
         intent = OrderIntent(
             args.symbol,
@@ -552,6 +548,8 @@ def main(argv=None) -> int:
     t.add_argument("--side", choices=["buy", "sell"], default="buy")
     t.add_argument("--price", type=float, default=None,
                    help="limit price (omit for market)")
+    t.add_argument("--confirmation", default="",
+                   help="configured account number required for production cancel")
 
     sub.add_parser("session")
     sub.add_parser("dashboard")
