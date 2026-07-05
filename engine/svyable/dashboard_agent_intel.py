@@ -11,6 +11,7 @@ import streamlit as st
 
 from svyable.agent_decision_guard import validate_agent_decision, write_guard_report
 from svyable.agent_pm_harness import render_agent_memo, write_agent_pm_pack
+from svyable.agent_review_receipt import write_review_receipt
 from svyable.dashboard_ui import percent
 
 
@@ -22,6 +23,17 @@ def _load_latest_context(output_root: str | Path) -> dict[str, Any]:
         return json.loads(path.read_text())
     except json.JSONDecodeError:
         st.warning(f"Latest context is malformed: {path}")
+        return {}
+
+
+def _load_latest_receipt(output_root: str | Path) -> dict[str, Any]:
+    path = Path(output_root) / "strategy_selection" / "latest_agent_review_receipt.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        st.warning(f"Latest receipt is malformed: {path}")
         return {}
 
 
@@ -149,6 +161,30 @@ def _render_decision_guard(output_root: str | Path) -> None:
     st.json(report)
 
 
+def _render_receipt(output_root: str | Path) -> None:
+    root = Path(output_root)
+    left, right = st.columns([1, 3])
+    if left.button("Write review receipt", use_container_width=True):
+        try:
+            receipt = write_review_receipt(root)
+            st.success(f"Wrote {receipt.get('receipt_md')}")
+        except Exception as exc:
+            st.error(str(exc))
+            return
+    right.caption("Freezes the current context, decision, guard status, and file hashes for review/audit.")
+    receipt = _load_latest_receipt(root)
+    if not receipt:
+        st.info("No receipt yet. Write a review receipt after the guard report is ready.")
+        return
+    cols = st.columns(5)
+    cols[0].metric("Receipt", receipt.get("status", "—"))
+    cols[1].metric("Candidate", receipt.get("candidate_id", "—"))
+    cols[2].metric("Confidence", _num(receipt.get("confidence")))
+    cols[3].metric("Blockers", len(receipt.get("blockers", []) or []))
+    cols[4].metric("Warnings", len(receipt.get("warnings", []) or []))
+    st.json(receipt)
+
+
 def _render_context(context: dict[str, Any], output_root: str | Path) -> None:
     summary = context.get("summary", {})
     trace = context.get("meta_decision_trace", {})
@@ -168,7 +204,7 @@ def _render_context(context: dict[str, Any], output_root: str | Path) -> None:
     if health.get("inputs_stale") or health.get("missing_execution_columns"):
         st.warning(f"Artifact issue: stale={health.get('inputs_stale')}, missing={health.get('missing_execution_columns')}")
 
-    tabs = st.tabs(["Decision tree", "Decision guard", "Counterfactuals", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
+    tabs = st.tabs(["Decision tree", "Decision guard", "Receipt", "Counterfactuals", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
     with tabs[0]:
         _render_tree(trace)
         st.markdown("**Allowed candidate IDs**")
@@ -180,22 +216,24 @@ def _render_context(context: dict[str, Any], output_root: str | Path) -> None:
     with tabs[1]:
         _render_decision_guard(output_root)
     with tabs[2]:
-        _render_counterfactuals(context)
+        _render_receipt(output_root)
     with tabs[3]:
-        _render_regime(trace)
+        _render_counterfactuals(context)
     with tabs[4]:
-        _render_ranked(trace)
+        _render_regime(trace)
     with tabs[5]:
-        _render_weights(trace)
+        _render_ranked(trace)
     with tabs[6]:
-        st.json(context)
+        _render_weights(trace)
     with tabs[7]:
+        st.json(context)
+    with tabs[8]:
         st.markdown(render_agent_memo(context))
 
 
 def render_agent_intel(output_root: str | Path) -> None:
     st.subheader("Selection meta harness")
-    st.caption("Visible selection diagnostics for human review: legal candidates, regime proxy, score tree, gates, factor warnings, counterfactual alternatives, guard validation, and weight provenance.")
+    st.caption("Visible selection diagnostics for human review: legal candidates, regime proxy, score tree, gates, factor warnings, counterfactual alternatives, guard validation, review receipt, and weight provenance.")
     root = Path(output_root)
     left, right = st.columns([1, 3])
     if left.button("Regenerate latest context pack", type="primary", use_container_width=True):
