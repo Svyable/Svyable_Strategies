@@ -63,7 +63,10 @@ def factor_correlation_matrix(
     scores = compute_all(panel, cfg, names=list(factor_names))
     columns: dict[str, pd.Series] = {}
     for name, frame in scores.items():
-        columns[name] = frame.tail(lookback).stack(dropna=True)
+        # stack() on a 2D frame yields a MultiIndex Series; dropna() removes
+        # missing (day, symbol) scores. pandas 3.0 removed the stack(dropna=)
+        # argument, so drop after stacking — equivalent for a single-level stack.
+        columns[name] = frame.tail(lookback).stack().dropna()
     combined = pd.DataFrame(columns)
     if combined.empty:
         return pd.DataFrame(index=factor_names, columns=factor_names, dtype=float)
