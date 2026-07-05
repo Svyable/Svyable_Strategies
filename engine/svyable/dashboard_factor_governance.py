@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from svyable.dashboard_service import DashboardService
+from svyable.factor_library import factor_metadata
 from svyable.factor_monitor import load_factor_monitor
 from svyable.strategy_registry import list_strategies
 
@@ -24,6 +25,7 @@ def _strategy_factor_usage() -> tuple[pd.DataFrame, pd.DataFrame]:
                 "maturity": spec.maturity,
                 "enabled_by_default": spec.enabled_by_default,
                 "family": spec.family,
+                "regime_profile": spec.regime_profile,
                 "factors": len(factor_names),
                 "factor_names": factor_names,
             }
@@ -43,21 +45,39 @@ def _strategy_factor_usage() -> tuple[pd.DataFrame, pd.DataFrame]:
     return usage, strategies
 
 
+def _catalog_with_fallback(catalog: pd.DataFrame) -> pd.DataFrame:
+    """Use live registry metadata when no factor-health artifact exists yet."""
+    if catalog is not None and not catalog.empty:
+        return catalog.copy()
+    return factor_metadata().copy()
+
+
+def _strategy_coverage(strategy_usage: pd.DataFrame, catalog: pd.DataFrame) -> pd.DataFrame:
+    if strategy_usage.empty:
+        return strategy_usage
+    stage = catalog["stage"].to_dict() if "stage" in catalog.columns else {}
+    coverage = strategy_usage.copy()
+    coverage["proven_factors"] = [
+        sum(1 for factor in factors_used if stage.get(factor) == "proven")
+        for factors_used in coverage["factor_names"]
+    ]
+    coverage["shadow_factors"] = coverage["factors"] - coverage["proven_factors"]
+    coverage["shadow_ratio"] = (coverage["shadow_factors"] / coverage["factors"].replace(0, pd.NA)).fillna(0.0).round(3)
+    coverage["frontier_watch"] = coverage["shadow_ratio"] >= 0.40
+    return coverage.drop(columns=["factor_names"])
+
+
 def render_factor_governance(service: DashboardService) -> None:
     monitor = load_factor_monitor(service)
-    catalog = monitor["catalog"]
+    catalog = _catalog_with_fallback(monitor["catalog"])
     sleeves = monitor["sleeves"]
     factors = monitor["factors"]
     usage, strategy_usage = _strategy_factor_usage()
 
-    if catalog.empty and not factors:
-        st.info("No factor-health artifacts yet. Run `svyable daily` first.")
-        return
-
     st.caption(
         "IC is purged, evaluated only on eligible pairwise observations, and "
         "adjusted for uncertainty, hit rate, and coverage. Shadow factors have no floor. "
-        "Registry coverage now shows which strategies actually depend on each factor."
+        "Registry coverage shows which strategies actually depend on each factor, even before factor-health artifacts exist."
     )
 
     if not catalog.empty:
@@ -100,17 +120,11 @@ def render_factor_governance(service: DashboardService) -> None:
             .sort_values(["default_strategy_count", "strategy_count"], ascending=False)
         )
         st.dataframe(factor_usage, use_container_width=True)
-        with st.expander("Strategy coverage"):
-            if not catalog.empty:
-                stage = catalog["stage"].to_dict()
-                coverage = strategy_usage.copy()
-                coverage["proven_factors"] = [
-                    sum(1 for factor in factors_used if stage.get(factor) == "proven")
-                    for factors_used in coverage["factor_names"]
-                ]
-                coverage["shadow_factors"] = coverage["factors"] - coverage["proven_factors"]
-                coverage = coverage.drop(columns=["factor_names"])
-                st.dataframe(coverage, use_container_width=True)
+        with st.expander("Strategy coverage", expanded=True):
+            coverage = _strategy_coverage(strategy_usage, catalog)
+            if not coverage.empty:
+                st.caption("Frontier watch flags strategies whose factor pack is at least 40% shadow/incubation factors.")
+                st.dataframe(coverage.sort_values(["frontier_watch", "shadow_ratio", "factors"], ascending=False), use_container_width=True)
             else:
                 st.dataframe(strategy_usage.drop(columns=["factor_names"], errors="ignore"), use_container_width=True)
 
@@ -119,6 +133,9 @@ def render_factor_governance(service: DashboardService) -> None:
         st.dataframe(sleeves, use_container_width=True)
 
     st.subheader("Factor health")
+    if not factors:
+        st.info("No factor-health artifacts yet. Registry and maturity coverage are shown from live metadata; run `svyable daily` for IC health.")
+        return
     for sleeve_name, frame in factors.items():
         st.markdown(f"**{sleeve_name.title()}**")
         if frame.empty:
