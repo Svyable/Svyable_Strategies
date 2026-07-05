@@ -9,7 +9,13 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from svyable.agent_chart_model import activation_readiness_rows, candidate_ranking_rows, utility_waterfall_rows
+from svyable.agent_chart_model import (
+    activation_readiness_rows,
+    alpha_candidate_metrics,
+    alpha_candidate_rows,
+    candidate_ranking_rows,
+    utility_waterfall_rows,
+)
 from svyable.agent_decision_guard import validate_agent_decision, write_guard_report
 from svyable.agent_decision_writer import write_agent_decision_from_context
 from svyable.agent_gui_model import artifact_inventory, issue_summary, recommended_next_step, status_icon, workflow_steps
@@ -70,6 +76,25 @@ def _status_markdown(rows: list[dict[str, Any]]) -> pd.DataFrame:
     if "status" in frame.columns:
         frame.insert(0, "", frame["status"].map(status_icon))
     return frame
+
+
+def _render_alpha_candidates(context: dict[str, Any]) -> None:
+    st.markdown("### Alpha candidate spotlight")
+    st.caption("Tracks Alpha Catalyst and Tape Acceleration candidates inside the current immutable candidate board.")
+    metrics = alpha_candidate_metrics(context)
+    cols = st.columns(5)
+    cols[0].metric("Alpha candidates", metrics["alpha_candidates"])
+    cols[1].metric("Allowed", metrics["allowed_alpha_candidates"])
+    cols[2].metric("Eligible", metrics["eligible_alpha_candidates"])
+    cols[3].metric("Best alpha", metrics["best_alpha_candidate"])
+    cols[4].metric("Best utility", _num(metrics["best_alpha_utility_bps"], " bps"))
+
+    frame = pd.DataFrame(alpha_candidate_rows(context))
+    if frame.empty:
+        st.info("No Alpha Catalyst or Tape Acceleration candidates are present in the current ranked trace yet.")
+        return
+    st.bar_chart(frame.set_index("candidate_id")[["utility_bps", "expected_alpha_bps"]], use_container_width=True)
+    st.dataframe(frame, use_container_width=True, hide_index=True)
 
 
 def _render_review_charts(context: dict[str, Any], guard: dict[str, Any], receipt: dict[str, Any], audit: dict[str, Any]) -> None:
@@ -158,6 +183,7 @@ def _render_overview(context: dict[str, Any], output_root: str | Path) -> None:
         except Exception as exc:
             st.error(str(exc))
 
+    _render_alpha_candidates(context)
     _render_review_charts(context, guard, receipt, audit)
 
     st.markdown("### Artifact inventory")
@@ -433,12 +459,14 @@ def _render_context(context: dict[str, Any], output_root: str | Path) -> None:
     if health.get("inputs_stale") or health.get("missing_execution_columns"):
         st.warning(f"Artifact issue: stale={health.get('inputs_stale')}, missing={health.get('missing_execution_columns')}")
 
-    tabs = st.tabs(["Overview", "Decision writer", "Decision tree", "Decision guard", "Receipt", "Integrity audit", "Counterfactuals", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
+    tabs = st.tabs(["Overview", "Alpha candidates", "Decision writer", "Decision tree", "Decision guard", "Receipt", "Integrity audit", "Counterfactuals", "Regime", "Candidate trace", "Weights", "Context JSON", "Memo"])
     with tabs[0]:
         _render_overview(context, output_root)
     with tabs[1]:
-        _render_decision_writer(context, output_root)
+        _render_alpha_candidates(context)
     with tabs[2]:
+        _render_decision_writer(context, output_root)
+    with tabs[3]:
         _render_tree(trace)
         st.markdown("**Allowed candidate IDs**")
         st.write(rails.get("allowed_candidate_ids", []))
@@ -446,29 +474,29 @@ def _render_context(context: dict[str, Any], output_root: str | Path) -> None:
         if not blocked.empty:
             with st.expander("Blocked candidates"):
                 st.dataframe(blocked, use_container_width=True, hide_index=True)
-    with tabs[3]:
-        _render_decision_guard(output_root)
     with tabs[4]:
-        _render_receipt(output_root)
+        _render_decision_guard(output_root)
     with tabs[5]:
-        _render_review_audit(output_root)
+        _render_receipt(output_root)
     with tabs[6]:
-        _render_counterfactuals(context)
+        _render_review_audit(output_root)
     with tabs[7]:
-        _render_regime(trace)
+        _render_counterfactuals(context)
     with tabs[8]:
-        _render_ranked(trace)
+        _render_regime(trace)
     with tabs[9]:
-        _render_weights(trace)
+        _render_ranked(trace)
     with tabs[10]:
-        st.json(context)
+        _render_weights(trace)
     with tabs[11]:
+        st.json(context)
+    with tabs[12]:
         st.markdown(render_agent_memo(context))
 
 
 def render_agent_intel(output_root: str | Path) -> None:
     st.subheader("Selection meta harness")
-    st.caption("Visible selection diagnostics for human review: stepper, guarded decision writer, review-chain runner, decision charts, artifact inventory, legal candidates, regime proxy, score tree, gates, counterfactual alternatives, guard validation, review receipt, integrity audit, and weight provenance.")
+    st.caption("Visible selection diagnostics for human review: alpha candidate spotlight, stepper, guarded decision writer, review-chain runner, decision charts, artifact inventory, legal candidates, regime proxy, score tree, gates, counterfactual alternatives, guard validation, review receipt, integrity audit, and weight provenance.")
     root = Path(output_root)
     context = _load_latest_context(root)
     if not context:
