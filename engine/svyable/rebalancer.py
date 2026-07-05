@@ -16,11 +16,17 @@ import math
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from svyable.config import SvyableConfig
 from svyable.brokers import BrokerConnector
+
+FAILURE_STATUSES = frozenset({
+    "error", "blocked", "rejected", "rejected_dry_run", "rejected_preflight",
+    "cancelled", "expired", "removed", "partially removed", "skipped_after_failure",
+})
 
 
 @dataclass
@@ -31,6 +37,20 @@ class PlannedOrder:
     est_price: float
     est_notional: float
     reason: str          # "rebalance" | "exit" | "adv_capped"
+
+
+def _result_status(result: dict[str, Any]) -> str:
+    return str(result.get("status", "")).strip().lower()
+
+
+def execution_result_failed(result: dict[str, Any]) -> bool:
+    status = _result_status(result)
+    return (
+        status in FAILURE_STATUSES
+        or bool(result.get("error"))
+        or bool(result.get("errors"))
+        or bool(result.get("warnings"))
+    )
 
 
 def plan_orders(targets: pd.Series, equity: float, prices: dict[str, float],
@@ -57,7 +77,6 @@ def plan_orders(targets: pd.Series, equity: float, prices: dict[str, float],
 
         reason = "exit" if tgt_qty == 0 and cur_qty > 0 else "rebalance"
 
-        # ADV participation cap: trade at most cap x ADV today, spill the rest
         if adv and sym in adv and adv[sym] > 0:
             max_notional = cfg.adv_participation_cap * adv[sym]
             if notional > max_notional:
@@ -73,10 +92,8 @@ def plan_orders(targets: pd.Series, equity: float, prices: dict[str, float],
             est_notional=round(notional, 2), reason=reason,
         ))
 
-    # sells first
     orders.sort(key=lambda o: (o.side != "sell", -o.est_notional))
 
-    # pre-trade sanity: resulting gross within cap
     buy_notional = sum(o.est_notional for o in orders if o.side == "buy")
     cur_gross = sum(abs(q) * prices.get(s, 0.0) for s, q in positions.items())
     sell_notional = sum(o.est_notional for o in orders if o.side == "sell")
@@ -86,26 +103,111 @@ def plan_orders(targets: pd.Series, equity: float, prices: dict[str, float],
     return orders
 
 
-def execute_plan(orders: list[PlannedOrder], broker: BrokerConnector,
-                 log_dir: str | Path, dry_run: bool = True) -> dict:
+def _submit_planned_order(
+    order: PlannedOrder,
+    broker: BrokerConnector,
+    *,
+    dry_run: bool,
+    confirmation: str,
+) -> dict[str, Any]:
+    submit_intent = getattr(broker, "submit_intent", None)
+    if callable(submit_intent):
+        from svyable.tastytrade_sdk import OrderIntent
+
+        return submit_intent(
+            OrderIntent(
+                symbol=order.symbol,
+                side=order.side,
+                quantity=order.qty,
+                order_type="market",
+                dry_run=dry_run,
+            ),
+            confirmation=confirmation,
+        )
+    if dry_run:
+        return {
+            "status": "planned",
+            "symbol": order.symbol,
+            "side": order.side,
+            "qty": order.qty,
+            "message": "Dry run only; no adapter preflight is available.",
+        }
+    return broker.submit_order(order.symbol, order.qty, order.side)
+
+
+def _execution_status(*, dry_run: bool, failed: bool, aborted: bool, result_count: int) -> str:
+    if failed:
+        return "degraded" if dry_run or not aborted else "failed"
+    if dry_run:
+        return "dry_run" if result_count else "planned"
+    return "ok"
+
+
+def execute_plan(
+    orders: list[PlannedOrder],
+    broker: BrokerConnector,
+    log_dir: str | Path,
+    dry_run: bool = True,
+    *,
+    fail_fast: bool = True,
+    confirmation: str = "",
+) -> dict:
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     record: dict = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "dry_run": dry_run,
+        "fail_fast": fail_fast,
         "planned": [asdict(o) for o in orders],
         "results": [],
+        "errors": [],
+        "aborted": False,
     }
-    if not dry_run:
-        for o in orders:
-            try:
-                record["results"].append(broker.submit_order(o.symbol, o.qty, o.side))
-            except Exception as e:  # noqa: BLE001 — keep going, log the failure
-                record["results"].append({"status": "error", "symbol": o.symbol,
-                                          "error": str(e)})
+
+    for idx, order in enumerate(orders):
+        try:
+            result = _submit_planned_order(
+                order,
+                broker,
+                dry_run=dry_run,
+                confirmation=confirmation,
+            )
+            result.setdefault("symbol", order.symbol)
+            result.setdefault("side", order.side)
+            result.setdefault("qty", order.qty)
+            record["results"].append(result)
+        except Exception as exc:  # noqa: BLE001
+            record["results"].append({
+                "status": "error",
+                "symbol": order.symbol,
+                "side": order.side,
+                "qty": order.qty,
+                "error": str(exc),
+            })
+
+        if execution_result_failed(record["results"][-1]):
+            record["errors"].append(record["results"][-1])
+            if fail_fast:
+                record["aborted"] = True
+                for skipped in orders[idx + 1:]:
+                    record["results"].append({
+                        "status": "skipped_after_failure",
+                        "symbol": skipped.symbol,
+                        "side": skipped.side,
+                        "qty": skipped.qty,
+                        "reason": "fail_fast",
+                    })
+                break
+
+    record["status"] = _execution_status(
+        dry_run=dry_run,
+        failed=bool(record["errors"]),
+        aborted=bool(record["aborted"]),
+        result_count=len(record["results"]),
+    )
     path = log_dir / f"orders_{stamp}.json"
-    path.write_text(json.dumps(record, indent=2))
+    path.write_text(json.dumps(record, indent=2, default=str))
     record["log_file"] = str(path)
     return record
 
