@@ -10,6 +10,7 @@ from svyable.dashboard_service import DashboardService
 from svyable.factor_library import factor_metadata
 from svyable.factor_monitor import load_factor_monitor
 from svyable.strategy_registry import list_strategies
+from svyable.strategy_registry_quality import registry_quality_audit, registry_quality_frames
 
 
 def _strategy_factor_usage() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -101,6 +102,31 @@ def _render_alpha_spotlight(catalog: pd.DataFrame) -> None:
             st.bar_chart(counts, use_container_width=True)
 
 
+def _render_registry_quality() -> None:
+    st.subheader("Registry quality audit")
+    st.caption("Read-only duplicate/missing coverage audit for strategy factor packs.")
+    report = registry_quality_audit()
+    cols = st.columns(5)
+    cols[0].metric("Registry", report["status"])
+    cols[1].metric("Strategies", report["strategy_count"])
+    cols[2].metric("Missing refs", report["missing_reference_count"])
+    cols[3].metric("Internal dupes", report["duplicate_factor_count"])
+    cols[4].metric("High-overlap pairs", report["high_overlap_pair_count"])
+    for item in report.get("blockers", []):
+        st.error(item)
+    for item in report.get("warnings", []):
+        st.warning(item)
+
+    frames = registry_quality_frames()
+    with st.expander("Strategy registry quality tables", expanded=bool(report.get("blockers") or report.get("warnings"))):
+        for name, frame in frames.items():
+            st.markdown(f"**{name.replace('_', ' ').title()}**")
+            if frame.empty:
+                st.caption("None")
+            else:
+                st.dataframe(frame, use_container_width=True, hide_index=True)
+
+
 def render_factor_governance(service: DashboardService) -> None:
     monitor = load_factor_monitor(service)
     catalog = _catalog_with_fallback(monitor["catalog"])
@@ -115,6 +141,7 @@ def render_factor_governance(service: DashboardService) -> None:
     )
 
     _render_alpha_spotlight(catalog)
+    _render_registry_quality()
 
     if not catalog.empty:
         catalog_view = catalog.copy()
