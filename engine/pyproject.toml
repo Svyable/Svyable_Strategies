@@ -35,6 +35,7 @@ svyable-strategy-daily = "svyable.strategy_daily:main"
 svyable-agent-pack = "svyable.agent_pm_harness:main"
 svyable-agent-guard = "svyable.agent_decision_guard:main"
 svyable-agent-receipt = "svyable.agent_review_receipt:main"
+svyable-agent-audit = "svyable.agent_review_audit:main"
 svyable-strategy-activate = "svyable.strategy_activate:main"
 
 [build-system]
