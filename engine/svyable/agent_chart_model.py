@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 
+ALPHA_STRATEGY_IDS = {"svyable_alpha_catalyst", "svyable_tape_acceleration"}
+
+
 def _float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -46,6 +49,59 @@ def candidate_ranking_rows(context: dict[str, Any], *, top_n: int = 12) -> list[
         })
     rows.sort(key=lambda row: row["utility_bps"], reverse=True)
     return rows[:top_n]
+
+
+def _candidate_strategy_id(item: dict[str, Any]) -> str:
+    return str(item.get("strategy_id") or item.get("strategy") or item.get("strategy_name") or "")
+
+
+def _candidate_score(item: dict[str, Any], key: str) -> float:
+    score = item.get("score_breakdown", {}) or {}
+    return _float(item.get(key, score.get(key)))
+
+
+def alpha_candidate_rows(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return Alpha Catalyst/Tape Acceleration rows from the ranked candidate trace."""
+    trace = context.get("meta_decision_trace", {}) or {}
+    allowed = set(str(item) for item in ((context.get("rails", {}) or {}).get("allowed_candidate_ids", []) or []))
+    rows: list[dict[str, Any]] = []
+    for rank, item in enumerate(trace.get("ranked_candidate_trace", []) or [], start=1):
+        strategy_id = _candidate_strategy_id(item)
+        if strategy_id not in ALPHA_STRATEGY_IDS:
+            continue
+        candidate = str(item.get("candidate_id", ""))
+        rows.append({
+            "rank": rank,
+            "candidate_id": candidate,
+            "strategy_id": strategy_id,
+            "family": "Alpha Catalyst" if strategy_id == "svyable_alpha_catalyst" else "Tape Acceleration",
+            "eligible": bool(item.get("eligible")),
+            "allowed": candidate in allowed,
+            "action": str(item.get("action", "")),
+            "expected_alpha_bps": round(_candidate_score(item, "expected_alpha_bps"), 3),
+            "utility_bps": round(_candidate_score(item, "utility_bps"), 3),
+            "cost_bps": round(_candidate_score(item, "estimated_cost_bps"), 3),
+            "turnover_penalty_bps": round(_candidate_score(item, "turnover_penalty_bps"), 3),
+            "risk_penalty_bps": round(_candidate_score(item, "risk_penalty_bps"), 3),
+        })
+    rows.sort(key=lambda row: row["utility_bps"], reverse=True)
+    return rows
+
+
+def alpha_candidate_metrics(context: dict[str, Any]) -> dict[str, Any]:
+    """Return headline alpha-candidate metrics for the PM cockpit."""
+    rows = alpha_candidate_rows(context)
+    allowed = [row for row in rows if row["allowed"]]
+    eligible = [row for row in rows if row["eligible"]]
+    best = rows[0] if rows else {}
+    return {
+        "alpha_candidates": len(rows),
+        "allowed_alpha_candidates": len(allowed),
+        "eligible_alpha_candidates": len(eligible),
+        "best_alpha_candidate": best.get("candidate_id", "—"),
+        "best_alpha_strategy": best.get("strategy_id", "—"),
+        "best_alpha_utility_bps": best.get("utility_bps", 0.0),
+    }
 
 
 def activation_readiness_rows(
