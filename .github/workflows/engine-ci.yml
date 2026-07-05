@@ -76,8 +76,17 @@ jobs:
       - name: Strategy blend regression
         run: python tests/test_strategy_blend.py
 
-      - name: Tastytrade adapter safety tests
+      - name: Tastytrade SDK safety
         run: python tests/test_tastytrade_sdk_preflight.py
+
+      - name: Broker adapter safety
+        run: python tests/test_broker_safety.py
+
+      - name: Rebalancer execution policy
+        run: python tests/test_rebalancer_execution_policy.py
+
+      - name: Ledger execution status
+        run: python tests/test_ledger_execution_status.py
 
       - name: Execution artifact regression
         run: python tests/test_execution_artifacts.py
