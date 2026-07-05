@@ -1,4 +1,8 @@
-"""tastytrade adapter — full order tooling behind the BrokerConnector protocol.
+"""Legacy tastytrade REST support.
+
+``TastytradeClient`` remains the low-level REST client used by data/session paths
+that still need quote tokens or DXLink candle support. New order-management code
+must use ``svyable.tastytrade_sdk.TastySdkBroker``.
 
 Environments (never mixed):
   sandbox     https://api.cert.tastyworks.com   (default — fake money)
@@ -16,17 +20,17 @@ Optional: TT_ACCOUNT pins the account number (else first account is used).
 API conventions honored: mandatory User-Agent, dasherized JSON keys, {"data": ...}
 response envelope, query-array `key[]=` params, 429 backoff, one re-auth on 401.
 
-Safety invariants:
-- every submission is dry-run validated first; warnings => NOT submitted
-- equity-only, Day time-in-force by default; long-only action mapping
-  (buy -> "Buy to Open", sell -> "Sell to Close")
-- production requires BOTH TT_ENV=production and allow_production=True from the caller
+Legacy order adapter note:
+- ``TastytradeBroker`` is retained only for backwards compatibility.
+- It is not used by the current CLI rebalance/tasty order paths.
+- Do not extend its order lifecycle methods; migrate callers to ``TastySdkBroker``.
 """
 
 from __future__ import annotations
 
 import os
 import time
+import warnings
 from datetime import datetime
 from typing import Any
 
@@ -43,7 +47,11 @@ TERMINAL_ORDER_STATUSES = frozenset({
 
 
 class TastytradeClient:
-    """Low-level REST client with token lifecycle management."""
+    """Low-level REST client with token lifecycle management.
+
+    This client is still used for REST-backed data/session support. It should not
+    be used as the canonical live order adapter; use ``TastySdkBroker`` for that.
+    """
 
     def __init__(self, env: str | None = None, allow_production: bool = False):
         self.env = (env or os.environ.get("TT_ENV", "sandbox")).lower()
@@ -132,10 +140,22 @@ class TastytradeClient:
 
 
 class TastytradeBroker:
-    """BrokerConnector adapter + full order tooling (dry-run gated)."""
+    """Deprecated REST BrokerConnector adapter.
+
+    This class is retained to avoid breaking old imports, but the canonical order
+    adapter is ``svyable.tastytrade_sdk.TastySdkBroker``. Current CLI order paths
+    use the SDK adapter because it has typed intents, redacted audit logging,
+    account confirmation gates, and explicit open/close actions.
+    """
 
     def __init__(self, env: str | None = None, allow_production: bool = False,
                  client: TastytradeClient | None = None):
+        warnings.warn(
+            "TastytradeBroker is deprecated for order management; use "
+            "svyable.tastytrade_sdk.TastySdkBroker instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.c = client or TastytradeClient(env=env, allow_production=allow_production)
         self._account: str = os.environ.get("TT_ACCOUNT", "")
 
@@ -204,6 +224,12 @@ class TastytradeBroker:
     def submit_order(self, symbol: str, qty: float, side: str,
                      order_type: str = "market", tif: str = "day",
                      price: float | None = None) -> dict:
+        warnings.warn(
+            "TastytradeBroker.submit_order is deprecated; use "
+            "TastySdkBroker.submit_intent with confirmation-aware gates.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         order = self.build_equity_order(symbol, qty, side, order_type=order_type,
                                         tif=tif, price=price)
         check = self.dry_run(order)
@@ -230,12 +256,24 @@ class TastytradeBroker:
                               params=params).get("items", [])
 
     def cancel_order(self, order_id: int) -> dict:
+        warnings.warn(
+            "TastytradeBroker.cancel_order is deprecated; use "
+            "TastySdkBroker.cancel_order with confirmation-aware gates.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         d = self.c.request("DELETE", f"/accounts/{self.account}/orders/{order_id}")
         return {"id": order_id, "status": d.get("status", "Cancel Requested")}
 
     def cancel_replace(self, order_id: int, original_order: dict, *,
                        price: float | None = None, order_type: str | None = None,
                        tif: str | None = None) -> dict:
+        warnings.warn(
+            "TastytradeBroker.cancel_replace is deprecated; use the SDK adapter "
+            "for future order lifecycle work.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         body = dict(original_order)
         if price is not None:
             body["price"] = round(float(price), 2)
