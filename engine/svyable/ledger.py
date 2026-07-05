@@ -70,6 +70,47 @@ CREATE TABLE IF NOT EXISTS events (
 );
 """
 
+_FAILURE_STATUSES = frozenset({
+    "error", "blocked", "rejected", "rejected_dry_run", "rejected_preflight",
+    "cancelled", "expired", "removed", "partially removed", "skipped_after_failure",
+})
+
+_STATUS_SEVERITY = {
+    "ok": 0,
+    "planned": 0,
+    "dry_run": 0,
+    "awaiting_agent": 0,
+    "evaluated": 0,
+    "degraded": 1,
+    "failed": 2,
+}
+
+
+def _result_failed(result: dict) -> bool:
+    status = str(result.get("status", "")).strip().lower()
+    return (
+        status in _FAILURE_STATUSES
+        or bool(result.get("error"))
+        or bool(result.get("errors"))
+        or bool(result.get("warnings"))
+    )
+
+
+def _execution_status_from_results(dry_run: bool, results: list[dict]) -> str | None:
+    if dry_run or not results:
+        return None
+    if any(str(r.get("status", "")).strip().lower() == "skipped_after_failure" for r in results):
+        return "failed"
+    if any(_result_failed(r) for r in results):
+        return "degraded"
+    return "ok"
+
+
+def _worse_status(left: str, right: str) -> str:
+    l_key = str(left or "ok").strip().lower()
+    r_key = str(right or "ok").strip().lower()
+    return right if _STATUS_SEVERITY.get(r_key, 0) > _STATUS_SEVERITY.get(l_key, 0) else left
+
 
 class Ledger:
     def __init__(self, path: str | Path):
@@ -110,6 +151,14 @@ class Ledger:
         self.con.commit()
         return int(cur.lastrowid)
 
+    def update_run_status(self, run_id: int, status: str, *, worse_only: bool = True) -> None:
+        row = self.con.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"run_id not found: {run_id}")
+        new_status = _worse_status(str(row[0]), status) if worse_only else status
+        self.con.execute("UPDATE runs SET status=? WHERE id=?", (new_status, run_id))
+        self.con.commit()
+
     def record_orders(self, run_id: int, broker: str, dry_run: bool,
                       planned: list[dict], results: list[dict]) -> None:
         result_by_symbol = {r.get("symbol"): r for r in results}
@@ -124,6 +173,12 @@ class Ledger:
                  order["qty"], order["est_price"], order["est_notional"],
                  "planned" if dry_run else result.get("status", "submitted"),
                  order.get("reason", "")))
+        inferred_status = _execution_status_from_results(dry_run, results)
+        if inferred_status and inferred_status != "ok":
+            self.con.execute(
+                "UPDATE runs SET status=? WHERE id=? AND kind='rebalance'",
+                (inferred_status, run_id),
+            )
         self.con.commit()
 
     def record_fills(self, run_id: int, broker: str, fills: list[dict]) -> None:

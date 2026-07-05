@@ -4,7 +4,7 @@ Svyable Strategies is a daily cross-sectional alpha research, portfolio-manageme
 
 The objective is effective systematic trading research: differentiated alpha sources, controlled beta participation, robust volatility and turbulence avoidance, honest costs, observable decisions, and one safe operating boundary.
 
-This README is the canonical project narrative and operating guide. Detailed institutional positioning and evidence standards are in [`docs/institutional_alpha_platform.md`](docs/institutional_alpha_platform.md). The human/agent operating contract is in [`docs/agentic_operating_model.md`](docs/agentic_operating_model.md).
+This README is the canonical project narrative and operating guide. Detailed institutional positioning and evidence standards are in [`docs/institutional_alpha_platform.md`](docs/institutional_alpha_platform.md). The human/agent operating contract is in [`docs/agentic_operating_model.md`](docs/agentic_operating_model.md). A strategy lifecycle walkthrough is in [`docs/strategy_day_in_life.md`](docs/strategy_day_in_life.md).
 
 ## Current truth
 
@@ -13,14 +13,24 @@ Svyable is **paper-operational research infrastructure**. It is not yet a live-c
 Implemented:
 
 - Vendor-agnostic daily OHLCV panel with validation, caching, and point-in-time processing discipline.
-- Price-action, residual, defensive, reversal, liquidity, behavioral, frontier tape-reading, and clearly labeled daily-flow proxy factors.
+- Price-action, residual, defensive, reversal, liquidity, behavioral, frontier tape-reading, tape-acceleration, alpha-catalyst, and clearly labeled daily-flow proxy factors.
+- Shared OHLCV factor primitives for frontier alpha families so Tape Acceleration and Alpha Catalyst do not drift through duplicated helper logic.
 - Portfolio Arcana analytics for market-model residual alpha, idiosyncratic volatility, idio information ratio, factor exposures, and symbol-level residual contributors.
 - Agent PM context-pack harness that converts the immutable candidate board into `agent_context.json`, `agent_pm_memo.md`, and a hash-matched decision template while forbidding same-cycle repo self-modification.
+- Selection Meta Harness cockpit with operator stepper, alpha candidate spotlight, guarded decision writer, one-click review chain, activation readiness gates, candidate utility decomposition chart, candidate ranking chart, artifact inventory, downloads, guard, receipt, audit, counterfactuals, regime proxy, and weight provenance.
+- Factor Governance Alpha Catalyst cockpit with strategy cards, alpha factor map, maturity mix chart, registry quality audit, and shadow/proven factor breakdown for the new alpha books.
+- Strategy day-in-life runbook model and CLI for explaining a strategy's read-only path from approved code to candidate board to reviewed canonical artifacts.
 - Visible meta harness: regime proxy, PASS/WARN/BLOCK decision tree, score decomposition, deterministic weight provenance, counterfactual alternatives, and decision readiness.
+- Guarded decision writer that fills the latest board date/hash, restricts choices to allowed candidate IDs, validates confidence/reason, and immediately runs the guard.
 - Pre-activation decision guard that validates `agent_decision.json` against the latest context, allowed candidates, hash, confidence, reason, and artifact readiness before activation.
+- Agent review receipt and integrity audit that freeze reviewed file hashes and verify the context/memo/decision/guard files remain unchanged before activation.
+- One-click review chain runner for context presence/refresh, guard, receipt, and audit without creating weights or operating artifacts.
 - Purged causal IC weighting with uncertainty, hit-rate, coverage, and redundancy controls.
 - Complete strategy registry: every strategy owns factors, construction, concentration, risk, cost, cadence, and maturity.
+- Strategy registry quality audit for missing factor references, repeated factors inside a strategy, exact duplicate packs, and high-overlap strategy pairs.
 - Svyable Frontier Price Action strategy candidate built from channel pressure, compression thrust, gap continuation, range participation, and range rejection plus institutional trend and resilience controls.
+- Svyable Tape Acceleration strategy candidate built from liquidity-squeeze breakouts, trend pullback reclaims, gap reversal/continuation pressure, exhaustion reversals, and range-volume acceleration plus institutional trend and resilience controls.
+- Svyable Alpha Catalyst strategy candidate built from residual acceleration, residual breakouts, downside absorption, failed breakdown reclaims, idiosyncratic trend quality, and volatility-transition thrust plus Tape Acceleration and institutional controls.
 - Correlation-cluster caps, score/equal/HRP/blended seat weighting, no-trade bands, and ADV-aware operating inputs.
 - Volatility targeting, drawdown controls, structural turbulence, absorption ratio, breadth, panic state, and own-book kill switch.
 - Fixed, inverse-volatility, and alpha/risk chimera portfolios with causal component-weight histories.
@@ -37,6 +47,30 @@ Not true yet:
 - Seed-universe historical tests remain survivorship-biased unless explicitly labeled point-in-time.
 - Institutional metrics are engineering evidence, not promised future returns.
 
+## A day in the life of a Svyable strategy
+
+Example: `svyable_alpha_catalyst`.
+
+1. **Approved-code boundary** — the strategy starts the day as already-merged code on `main`. New ideas discovered today become future research work, not same-cycle code changes.
+2. **Data refresh** — the runtime refreshes and validates the daily OHLCV panel.
+3. **Factor compute** — causal daily-bar factors are computed. Alpha Catalyst brings residual acceleration, residual breakout, downside absorption, failed breakdown reclaim, idiosyncratic trend quality, and volatility-transition thrust; it also blends Tape Acceleration and institutional controls.
+4. **Strategy recipe** — the registry applies the strategy's factor pack, seats, caps, cost assumptions, no-trade band, target volatility, stressed volatility, maturity, and cadence.
+5. **Candidate construction** — the portfolio engine creates a candidate artifact with concentration, turnover, volatility, cost, and liquidity controls.
+6. **Candidate board** — all enabled strategies/chimeras compete on an immutable board with a candidate-set hash.
+7. **Visible PM context** — the harness writes context, memo, visible score tree, regime proxy, counterfactuals, readiness, and allowed IDs.
+8. **Review** — the PM reviews Selection Meta Harness, Factor Governance, alpha candidate spotlight, registry quality audit, factor maturity, utility, and weight provenance.
+9. **Decision artifact** — the guarded writer writes one allowed candidate ID with the latest board date/hash, confidence, and reason.
+10. **Guard / receipt / audit** — review chain validates the decision, freezes reviewed hashes, and verifies nothing changed.
+11. **Canonical artifact handoff** — the reviewed candidate can become the canonical target artifact consumed by Portfolio Ops.
+12. **Learning loop** — diagnostics and review observations return to the research/development loop for future commits.
+
+Generate this runbook from code:
+
+```bash
+svyable-strategy-day --strategy svyable_alpha_catalyst
+svyable-strategy-day --strategy svyable_alpha_catalyst --write --out outputs
+```
+
 ## End-to-end operating flow
 
 ```mermaid
@@ -52,12 +86,19 @@ flowchart TB
 
     subgraph FACT["2 · Governed factor library"]
         FLIB["factor_library.py\ncompute_all"]
+        TOOL["factor_ohlcv_tools.py\nshared OHLCV primitives"]
         FINST["factor_institutional.py\nresidual / resilience"]
         FPA["factor_price_action_frontier.py\nchannel / squeeze / gap / range"]
+        FTAPE["factor_tape_acceleration.py\nsqueeze · reclaim · gap · exhaustion · acceleration"]
+        FCAT["factor_alpha_catalyst.py\nresidual acceleration · absorption · volatility transition"]
         ARC["portfolio_arcana.py\nresidual alpha lens"]
         FHT["factor_health_tools.py\ntrend alerts"]
+        TOOL --> FTAPE
+        TOOL --> FCAT
         FINST --> FLIB
         FPA --> FLIB
+        FTAPE --> FLIB
+        FCAT --> FLIB
         FLIB --> ARC
         FLIB --> FHT
     end
@@ -73,8 +114,16 @@ flowchart TB
 
     subgraph STRAT["4 · Mandates"]
         REG["strategy_registry.py\ncomplete strategy recipes"]
+        QUAL["strategy_registry_quality.py\nmissing/duplicate/overlap audit"]
+        LIFE["strategy_lifecycle.py\nday-in-life runbook"]
+        TAPE["strategy_tape_acceleration.py\nfrontier tape-acceleration book"]
+        CAT["strategy_alpha_catalyst.py\nresidual catalyst book"]
         BLEND["strategy_blend.py\ncausal chimeras"]
         REG --> ART
+        REG --> QUAL
+        REG --> LIFE
+        TAPE --> ART
+        CAT --> ART
         BLEND --> ART
     end
 
@@ -84,12 +133,19 @@ flowchart TB
         META["agent_meta_trace.py\nvisible regime + decision tree"]
         EXPLAIN["selection_explain.py\ncounterfactual alternatives"]
         HARNESS["agent_pm_harness.py\ncontext pack + rails"]
+        WRITER["agent_decision_writer.py\nguarded decision writer"]
         DECISION["agent_decision.json\none allowed candidate_id"]
         GUARD["agent_decision_guard.py\npre-activation PASS/BLOCK"]
+        RECEIPT["agent_review_receipt.py\nreview receipt + hashes"]
+        AUDIT["agent_review_audit.py\nintegrity audit"]
+        CHAIN["agent_review_chain.py\none-click review chain"]
         ACT["strategy_activate.py\none canonical portfolio"]
         DAILY --> BOARD --> META --> HARNESS
         BOARD --> EXPLAIN --> HARNESS
-        HARNESS --> DECISION --> GUARD --> ACT
+        HARNESS --> WRITER --> DECISION --> GUARD --> RECEIPT --> AUDIT --> ACT
+        CHAIN -. orchestrates .-> GUARD
+        CHAIN -. orchestrates .-> RECEIPT
+        CHAIN -. orchestrates .-> AUDIT
     end
 
     subgraph OPS["6 · Operations + audit"]
@@ -114,18 +170,22 @@ sequenceDiagram
     participant Human as Human PM
     participant Agent as Agent PM
     participant Guard as Decision Guard
+    participant Receipt as Review Receipt
+    participant Audit as Integrity Audit
     participant Ops as Portfolio Ops
     participant Adapter as Adapter layer
 
     Repo->>Repo: refresh panel, compute factors, run strategies/chimeras
     Repo->>Repo: write immutable candidate board + candidate_set_hash
     Repo->>Agent: write agent_context.json, agent_pm_memo.md, decision template
-    Repo->>Human: show Selection Meta Harness GUI
-    Human->>Agent: review allowed candidates, trace, counterfactuals, readiness
-    Agent->>Repo: write hash-matched agent_decision.json only
+    Repo->>Human: show Selection Meta Harness cockpit and charts
+    Human->>Repo: write guarded agent_decision.json from allowed candidates
+    Agent->>Repo: or write hash-matched agent_decision.json only
     Repo->>Guard: validate date, hash, allowed candidate, readiness, reason
-    Guard->>Repo: PASS or BLOCK report
-    Repo->>Ops: activate canonical weights_today.csv only after PASS
+    Guard->>Receipt: freeze reviewed context/decision/guard file hashes
+    Receipt->>Audit: verify reviewed files remain unchanged
+    Audit->>Repo: PASS or BLOCK report
+    Repo->>Ops: activate canonical weights_today.csv only after review PASS
     Ops->>Human: show drift, quotes, stale inputs, readiness, preflight
     Human->>Ops: approve sandbox workflow or manual action
     Ops->>Adapter: pass only validated artifacts through rails
@@ -142,7 +202,7 @@ flowchart LR
     end
 
     subgraph DAILY["Daily PM loop"]
-        BOARD["Candidate board"] --> PACK["Context pack"] --> CHOICE["Decision artifact"] --> GUARD["Decision guard"] --> CANON["Canonical weights"] --> PLAN["Operating plan"]
+        BOARD["Candidate board"] --> PACK["Context pack"] --> CHOICE["Decision artifact"] --> GUARD["Decision guard"] --> RECEIPT["Receipt"] --> AUDIT["Audit"] --> CANON["Canonical weights"] --> PLAN["Operating plan"]
     end
 
     MAIN -. "future run" .-> BOARD
@@ -159,8 +219,13 @@ Same-cycle repository self-improvement is forbidden. The daily loop must operate
 | `agent_context.json` | `agent_pm_harness.py` | agent / GUI | Machine-readable board, rails, trace, readiness |
 | `agent_pm_memo.md` | `agent_pm_harness.py` | human PM | Human-readable decision memo |
 | `agent_decision_template.json` | `agent_pm_harness.py` | agent / human | Legal output schema |
-| `agent_decision.json` | agent / human | guard + activation | Hash-matched candidate choice |
+| `agent_decision.json` | writer / agent / human | guard + activation | Hash-matched candidate choice |
 | `latest_agent_decision_guard.json` | `agent_decision_guard.py` | human / automation | PASS/BLOCK validation report |
+| `latest_agent_review_receipt.json/md` | `agent_review_receipt.py` | human / audit | Frozen review packet with file hashes |
+| `latest_agent_review_audit.json` | `agent_review_audit.py` | human / automation | Receipt integrity PASS/BLOCK report |
+| `latest_agent_review_chain.json` | `agent_review_chain.py` | human / automation | One-click review-chain report |
+| `latest_strategy_registry_quality.json/md` | `strategy_registry_quality.py` | human / governance | Missing/duplicate/overlap registry audit |
+| `<strategy>_day_in_life.json/md` | `strategy_lifecycle.py` | human / docs | Strategy lifecycle narrative and operating contract |
 | `weights_today.csv` | activation / pipeline | Portfolio Ops | Canonical target weights |
 | `execution_inputs.csv` | pipeline | rebalancer / preflight | Prices, ADV, liquidity flags |
 | `ledger.db` | ops layers | dashboards / audit | Runs, warnings, actions, fills, drift |
@@ -182,44 +247,54 @@ python -m pip install -e '.[all,dev]'
 ## Daily PM commands
 
 ```bash
+python -m svyable.strategy_lifecycle --strategy svyable_alpha_catalyst
+python -m svyable.strategy_registry_quality --write --out outputs
 python -m svyable.strategy_daily --evaluate-only
 python -m svyable.agent_pm_harness --out outputs
-python -m svyable.agent_decision_guard --out outputs --write
+python -m svyable.agent_decision_writer --out outputs --candidate <allowed_candidate_id> --confidence 0.60 --reason "Reviewed meta harness and approved this candidate."
+python -m svyable.agent_review_chain --out outputs
 python -m svyable.strategy_activate --out outputs
 ```
 
 Installed script equivalents:
 
 ```bash
+svyable-strategy-day --strategy svyable_alpha_catalyst
+svyable-registry-quality --write --out outputs
 svyable-strategy-daily --evaluate-only
 svyable-agent-pack --out outputs
-svyable-agent-guard --out outputs --write
+svyable-agent-decide --out outputs --candidate <allowed_candidate_id> --confidence 0.60 --reason "Reviewed meta harness and approved this candidate."
+svyable-agent-review-chain --out outputs
 svyable-strategy-activate --out outputs
 ```
 
 ## Human PM checklist
 
-1. Generate the daily candidate board in agent/evaluate-only mode.
-2. Open Streamlit → **Selection Meta Harness**.
-3. Confirm decision readiness is `PASS`.
-4. Review visible regime proxy, decision tree, blocked candidates, counterfactual alternatives, and deterministic weight provenance.
-5. Approve or write `strategy_selection/agent_decision.json` using only an allowed `candidate_id` and matching hash.
-6. Run the decision guard and resolve any `BLOCK` report before activation.
-7. Activate canonical weights.
-8. Use Portfolio Ops for quote sanity, drift review, preflight, sandbox workflow, reconciliation, and audit.
+1. Generate or review the strategy day-in-life runbook when onboarding a new strategy or PM workflow.
+2. Run the registry quality audit when factor packs or strategies change.
+3. Generate the daily candidate board in agent/evaluate-only mode.
+4. Open Streamlit → **Selection Meta Harness**.
+5. Open **Factor Governance** and review the Alpha Catalyst cockpit, strategy cards, alpha factor map, maturity mix, and registry quality audit.
+6. Confirm decision readiness is `PASS` and review the activation-readiness gates.
+7. Review the alpha candidate spotlight, utility decomposition chart, candidate ranking chart, visible regime proxy, decision tree, blocked candidates, counterfactual alternatives, and deterministic weight provenance.
+8. Use the guarded decision writer to write `strategy_selection/agent_decision.json` from an allowed `candidate_id` and matching hash.
+9. Run the one-click review chain and resolve any `BLOCK` report before activation.
+10. Activate canonical weights.
+11. Use Portfolio Ops for quote sanity, drift review, preflight, sandbox workflow, reconciliation, and audit.
 
 ## Repository map
 
 | Layer | Important modules |
 | --- | --- |
 | Data | `providers.py`, `panel.py`, `calendar.py`, `universe.py` |
-| Factors | `factor_library.py`, `factor_institutional.py`, `factor_price_action_frontier.py`, `factor_health_tools.py` |
-| Portfolio intelligence | `portfolio_arcana.py`, `selection_explain.py`, `agent_meta_trace.py` |
-| Strategy frontier | `strategy_registry.py`, `strategy_blend.py`, `strategy_daily.py`, `strategy_selector.py` |
-| Agent PM harness | `agent_pm_harness.py`, `agent_decision_guard.py`, `strategy_activate.py`, `dashboard_agent_intel.py`, `pages/8_Agent_Meta_Harness.py` |
+| Factors | `factor_library.py`, `factor_ohlcv_tools.py`, `factor_institutional.py`, `factor_price_action_frontier.py`, `factor_tape_acceleration.py`, `factor_alpha_catalyst.py`, `factor_health_tools.py` |
+| Portfolio intelligence | `portfolio_arcana.py`, `selection_explain.py`, `agent_meta_trace.py`, `strategy_alpha_diagnostics.py` |
+| Strategy frontier | `strategy_registry.py`, `strategy_registry_quality.py`, `strategy_lifecycle.py`, `strategy_tape_acceleration.py`, `strategy_alpha_catalyst.py`, `strategy_blend.py`, `strategy_daily.py`, `strategy_selector.py` |
+| GUI surfaces | `dashboard_factor_governance.py`, `alpha_gui_model.py`, `dashboard_agent_intel.py`, `agent_chart_model.py`, `agent_gui_model.py`, `pages/8_Agent_Meta_Harness.py` |
+| Agent PM harness | `agent_pm_harness.py`, `agent_decision_writer.py`, `agent_decision_guard.py`, `agent_review_receipt.py`, `agent_review_audit.py`, `agent_review_chain.py`, `strategy_activate.py` |
 | Operations | `dashboard_command_center.py`, `dashboard_portfolio_ops.py`, `dashboard_readiness.py`, `dashboard_live_market.py` |
 | Execution/audit | `rebalancer.py`, `execution_control.py`, `submission_guard.py`, adapter modules, `ledger.py` |
-| Tests | `engine/tests/test_agent_pm_harness.py`, `test_agent_meta_trace.py`, `test_selection_explain.py`, `test_agent_decision_guard.py`, factor/strategy/readiness tests |
+| Tests | `engine/tests/test_agent_pm_harness.py`, `test_agent_meta_trace.py`, `test_selection_explain.py`, `test_agent_decision_guard.py`, `test_agent_decision_writer.py`, `test_agent_review_receipt.py`, `test_agent_review_audit.py`, `test_agent_review_chain.py`, `test_agent_chart_model.py`, `test_alpha_gui_model.py`, `test_alpha_catalyst_strategy.py`, `test_tape_acceleration_alpha.py`, `test_strategy_lifecycle.py`, `test_strategy_registry_quality.py`, GUI/factor/strategy/readiness tests |
 
 ## Safety and truthfulness
 
