@@ -8,7 +8,11 @@ appropriate without changing daily selection behavior.
 
 from __future__ import annotations
 
+import argparse
+import json
+from datetime import datetime, timezone
 from itertools import combinations
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -86,6 +90,8 @@ def registry_quality_audit(*, overlap_threshold: float = 0.85) -> dict[str, Any]
 
     return {
         "status": "PASS" if not blockers else "BLOCK",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "overlap_threshold": overlap_threshold,
         "strategy_count": len(specs),
         "known_factor_count": len(known),
         "missing_reference_count": sum(row["missing_count"] for row in missing_rows),
@@ -113,3 +119,83 @@ def registry_quality_frames(*, overlap_threshold: float = 0.85) -> dict[str, pd.
         "exact_duplicate_packs": pd.DataFrame(report["exact_duplicate_packs"]),
         "high_overlap_pairs": pd.DataFrame(report["high_overlap_pairs"]),
     }
+
+
+def render_registry_quality_markdown(report: dict[str, Any]) -> str:
+    """Render a compact human-readable registry quality report."""
+    lines = [
+        "# Strategy Registry Quality Audit",
+        "",
+        f"- Status: **{report.get('status', 'UNKNOWN')}**",
+        f"- Generated: {report.get('generated_at', 'unknown')}",
+        f"- Strategies: {report.get('strategy_count', 0)}",
+        f"- Known factors: {report.get('known_factor_count', 0)}",
+        f"- Missing references: {report.get('missing_reference_count', 0)}",
+        f"- Internal duplicate factors: {report.get('duplicate_factor_count', 0)}",
+        f"- Exact duplicate strategy packs: {report.get('exact_duplicate_pack_count', 0)}",
+        f"- High-overlap strategy pairs: {report.get('high_overlap_pair_count', 0)}",
+        "",
+        report.get("contract", "Read-only diagnostics."),
+        "",
+    ]
+    for title, key in [
+        ("Blockers", "blockers"),
+        ("Warnings", "warnings"),
+    ]:
+        lines.extend([f"## {title}", ""])
+        items = report.get(key, []) or []
+        if not items:
+            lines.append("None.")
+        else:
+            lines.extend(f"- {item}" for item in items)
+        lines.append("")
+
+    tables = [
+        ("Missing references", "missing_references"),
+        ("Internal duplicate factors", "internal_duplicates"),
+        ("Exact duplicate packs", "exact_duplicate_packs"),
+        ("High-overlap pairs", "high_overlap_pairs"),
+    ]
+    for title, key in tables:
+        rows = report.get(key, []) or []
+        lines.extend([f"## {title}", ""])
+        if not rows:
+            lines.append("None.")
+        else:
+            for row in rows:
+                lines.append(f"- `{row}`")
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def write_registry_quality_report(
+    output_root: str | Path = "outputs",
+    *,
+    overlap_threshold: float = 0.85,
+) -> dict[str, Any]:
+    """Write JSON and Markdown registry quality reports under outputs/governance."""
+    root = Path(output_root)
+    report_dir = root / "governance"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report = registry_quality_audit(overlap_threshold=overlap_threshold)
+    json_path = report_dir / "latest_strategy_registry_quality.json"
+    md_path = report_dir / "latest_strategy_registry_quality.md"
+    json_path.write_text(json.dumps(report, indent=2, default=str))
+    md_path.write_text(render_registry_quality_markdown(report))
+    return {**report, "json_path": str(json_path), "markdown_path": str(md_path)}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Write/read strategy registry quality diagnostics.")
+    parser.add_argument("--out", default="outputs", help="Output root for governance reports")
+    parser.add_argument("--overlap-threshold", type=float, default=0.85, help="Jaccard threshold for high-overlap strategy-pair warnings")
+    parser.add_argument("--write", action="store_true", help="Persist JSON and Markdown reports")
+    args = parser.parse_args(argv)
+
+    report = write_registry_quality_report(args.out, overlap_threshold=args.overlap_threshold) if args.write else registry_quality_audit(overlap_threshold=args.overlap_threshold)
+    print(json.dumps(report, indent=2, default=str))
+    return 0 if report.get("status") == "PASS" else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
