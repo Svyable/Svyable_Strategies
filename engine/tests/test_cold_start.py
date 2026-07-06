@@ -30,8 +30,7 @@ def _panel_with_new_symbol() -> Panel:
     open_ = base.shift(1).fillna(base) * 0.995
     high = base * 1.02
     low = base * 0.98
-    volume = base * 0 + 1_000_000.0
-    volume.loc[base.isna()] = np.nan
+    volume = (base * 0 + 1_000_000.0).where(base.notna())
     return Panel(open=open_, high=high, low=low, close=base, volume=volume)
 
 
