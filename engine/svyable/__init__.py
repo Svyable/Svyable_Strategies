@@ -17,3 +17,4 @@ from svyable import factor_tape_acceleration as _factor_tape_acceleration  # noq
 from svyable import factor_alpha_catalyst as _factor_alpha_catalyst  # noqa: F401,E402
 from svyable import factor_leadership_quality as _factor_leadership_quality  # noqa: F401,E402
 from svyable import factor_downside_resilience as _factor_downside_resilience  # noqa: F401,E402
+from svyable import factor_rotation_breadth as _factor_rotation_breadth  # noqa: F401,E402
