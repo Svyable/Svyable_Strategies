@@ -11,6 +11,7 @@ import pandas as pd
 
 from svyable import factor_library as flib
 from svyable.artifacts import ArtifactWriter, morning_report
+from svyable.cold_start import cold_start_adjustment, latest_diagnostics
 from svyable.config import SvyableConfig
 from svyable.construct import ConstructResult, build_unit_weights
 from svyable.metrics import deflated_sharpe, perf_summary
@@ -78,16 +79,24 @@ def run_pipeline(
         extra_sleeve_scores=extra,
         factors=factors,
     )
+    cold_start = cold_start_adjustment(panel, factors, cfg) if cfg.cold_start_enabled else None
+    model_score = ensemble.score
+    max_pos_mult = None
+    if cold_start is not None:
+        model_score = model_score * cold_start.score_multiplier
+        max_pos_mult = cold_start.max_pos_multiplier
+
     liquidity = panel.liquidity_mask(
         cfg.min_adv,
         cfg.min_price,
         cfg.adv_win,
     )
     construction = build_unit_weights(
-        ensemble.score,
+        model_score,
         panel.ret,
         liquidity,
         cfg,
+        max_pos_mult=max_pos_mult,
     )
     risk = apply_risk_budget(
         construction.unit_weights,
@@ -140,6 +149,10 @@ def run_pipeline(
         writer.write_frame("factor_catalog", catalog)
         writer.write_frame("pnl_diag", pnl)
         writer.write_frame("execution_inputs", execution_inputs)
+        cold_start_diag = None
+        if cold_start is not None:
+            cold_start_diag = latest_diagnostics(cold_start, last)
+            writer.write_frame("cold_start_diagnostics", cold_start_diag)
         if risk.regime is not None:
             writer.write_frame("regime", risk.regime.iloc[-504:])
         for name, factor_weights in ensemble.factor_weights.items():
@@ -188,6 +201,25 @@ def run_pipeline(
             "regime_ready",
             "multiplier",
         ]
+        cold_start_summary = None
+        if cold_start_diag is not None and len(cold_start_diag):
+            cold = cold_start_diag[cold_start_diag["is_cold_start"]]
+            cold_start_summary = {
+                "enabled": True,
+                "min_trading_days": cfg.cold_start_min_trading_days,
+                "full_trading_days": cfg.cold_start_full_trading_days,
+                "min_factor_coverage": cfg.cold_start_min_factor_coverage,
+                "cold_start_count": int(len(cold)),
+                "eligible_cold_start_count": int(cold["eligible_by_cold_start"].sum()),
+                "held_cold_start_count": int(
+                    weights_today.reindex(cold.index).fillna(0.0).gt(0.0).sum()
+                ),
+            }
+        elif cfg.cold_start_enabled:
+            cold_start_summary = {"enabled": True, "cold_start_count": 0}
+        else:
+            cold_start_summary = {"enabled": False}
+
         writer.write_meta(
             {
                 "strategy_id": cfg.strategy_id,
@@ -206,9 +238,11 @@ def run_pipeline(
                     "proven": int(stages.get("proven", 0)),
                     "shadow": int(stages.get("shadow", 0)),
                     "missing_values_preserved_for_ic": True,
+                    "available_signal_score_normalization": True,
                     "tradable_universe_ic": True,
                     "precomputed_cache": precomputed_factors is not None,
                 },
+                "cold_start": cold_start_summary,
                 "regime": (
                     {
                         column: (
@@ -259,35 +293,3 @@ def run_pipeline(
         output_dir=output_dir,
         factor_names=selected_factors,
     )
-
-
-def backtest_report(
-    result: RunResult,
-    panel: Panel,
-    cfg: SvyableConfig,
-    n_trials: int = 20,
-) -> dict:
-    net = result.pnl["net_ret"]
-    return {
-        "full_period": perf_summary(net, benchmark=panel.market_ret),
-        "deflated_sharpe": deflated_sharpe(net, n_trials=n_trials),
-        "avg_daily_turnover": round(
-            float(result.pnl["turnover"].mean() / 2),
-            4,
-        ),
-        "tc_drag_annual": round(
-            float(result.pnl["tc"].mean() * 252),
-            4,
-        ),
-        "avg_gross": round(
-            float(result.pnl["gross_exposure"].mean()),
-            3,
-        ),
-        "no_trade_band_held_frac": round(
-            float(result.construct.held_days.mean()),
-            3,
-        ),
-        "kill_switch_days": int(result.risk.kill_switch.sum()),
-        "config_hash": cfg.config_hash(),
-        "factor_count": len(result.factor_names),
-    }
