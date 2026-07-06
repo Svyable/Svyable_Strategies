@@ -56,21 +56,27 @@ def down_market_residual_strength(panel: Panel, cfg: SvyableConfig) -> pd.DataFr
     A name scores well when its beta-stripped return remains positive on days
     when the internal market proxy is weak. The statistic is normalized by its
     residual volatility and scaled by the square-root of observed weak-market
-    days, with a modest minimum event count to avoid requiring crisis-like data in
-    normal synthetic smoke tests.
+    days. If a calm synthetic/live window has no weak-market observations at all,
+    it falls back to ordinary rolling residual strength so the factor remains a
+    usable resilience proxy instead of degenerating to all-NaN.
     """
     resid = _residual(panel, cfg)
     window = 63
     min_down_days = max(5, window // 8)
+    min_resid_days = max(20, window // 2)
     mask = _market_down_mask(panel, window).reindex(resid.index).fillna(False)
     down_resid = _where_dates(resid, mask, other=0.0)
-    count = mask.astype(float).rolling(window, min_periods=min_down_days).sum()
-    strength = down_resid.rolling(window, min_periods=min_down_days).sum().div(
+    count = mask.astype(float).rolling(window, min_periods=1).sum()
+    conditional_strength = down_resid.rolling(window, min_periods=min_down_days).sum().div(
         count.replace(0.0, np.nan),
         axis=0,
     )
-    resid_vol = resid.rolling(window, min_periods=max(20, window // 2)).std()
-    signal = strength.div(resid_vol + EPS, axis=0) * np.sqrt(count.clip(lower=1.0))
+    unconditional_strength = resid.rolling(window, min_periods=min_resid_days).mean()
+    enough_weak_samples = count.ge(min_down_days)
+    strength = conditional_strength.where(enough_weak_samples, unconditional_strength, axis=0)
+    resid_vol = resid.rolling(window, min_periods=min_resid_days).std()
+    effective_count = count.where(enough_weak_samples, float(window)).clip(lower=1.0)
+    signal = strength.div(resid_vol + EPS, axis=0) * np.sqrt(effective_count)
     return signal.clip(-6.0, 6.0)
 
 
@@ -127,7 +133,7 @@ def volatility_cooldown_momentum(panel: Panel, cfg: SvyableConfig) -> pd.DataFra
 
 
 def register_downside_resilience() -> None:
-    register_factor("down_market_residual_strength", "resilience", down_market_residual_strength, proven=False, lineage="down-market residual strength", description="Residual strength measured specifically on weak broad-market days.")
+    register_factor("down_market_residual_strength", "resilience", down_market_residual_strength, proven=False, lineage="down-market residual strength", description="Residual strength measured specifically on weak broad-market days, with rolling residual-strength fallback when weak samples are absent.")
     register_factor("downside_capture_inverse", "resilience", downside_capture_inverse, proven=False, lineage="inverse downside capture", description="Low or positive capture on negative market-return days.")
     register_factor("panic_reclaim_strength", "resilience", panic_reclaim_strength, proven=False, lineage="panic reclaim strength", description="Fast recovery after broad market selloffs with strong close location.")
     register_factor("drawdown_floor_stability", "resilience", drawdown_floor_stability, proven=False, lineage="drawdown floor stability", description="Shallow and stable medium-term drawdowns.")
