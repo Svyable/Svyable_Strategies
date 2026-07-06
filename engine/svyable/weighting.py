@@ -316,15 +316,41 @@ def latest_ic_diagnostics(
 def composite_score(
     factors: dict[str, pd.DataFrame],
     weights: pd.DataFrame,
+    *,
+    normalize_available: bool = True,
 ) -> pd.DataFrame:
-    """Compute ``sum_f weight[t,f] * factor_f[t,asset]``."""
+    """Compute the weighted cross-sectional score.
+
+    Missing signals mean "no information," not "neutral evidence." When
+    ``normalize_available`` is true, each asset's score is divided by the weight
+    mass of factors that are actually available for that asset/date. A new
+    listing can therefore express valid short-horizon evidence without being
+    mechanically diluted by unavailable 126/252-day signals; the cold-start layer
+    separately shrinks confidence and caps position size.
+    """
+
     names = list(factors)
     first = factors[names[0]]
     array = np.stack(
         [factors[name].to_numpy(dtype=np.float32) for name in names], axis=1
     )
     weight_array = weights.reindex(columns=names).to_numpy(dtype=np.float32)
-    score = np.einsum("tf,tfn->tn", weight_array, np.nan_to_num(array))
+    finite = np.isfinite(array)
+    score = np.einsum("tf,tfn->tn", weight_array, np.where(finite, array, 0.0))
+
+    if normalize_available:
+        available_weight = np.einsum(
+            "tf,tfn->tn",
+            np.maximum(weight_array, 0.0),
+            finite.astype(np.float32),
+        )
+        score = np.divide(
+            score,
+            available_weight,
+            out=np.zeros_like(score, dtype=np.float32),
+            where=available_weight > EPS,
+        )
+
     return pd.DataFrame(score, index=first.index, columns=first.columns)
 
 
