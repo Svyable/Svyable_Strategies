@@ -143,6 +143,56 @@ def test_drawdown_tape_builds_traces():
 
 
 @pytest.mark.skipif(not interactive.available(), reason="Plotly is not installed")
+def test_return_distribution_builds_histogram():
+    fig = interactive.return_distribution(pd.Series([0.01, -0.02, 0.005, 0.0]), title="Return distribution")
+    assert len(fig.data) >= 1
+    assert "Return distribution" in fig.layout.title.text
+
+
+@pytest.mark.skipif(not interactive.available(), reason="Plotly is not installed")
+def test_time_series_lines_builds_diagnostic_traces():
+    idx = pd.bdate_range("2026-01-01", periods=3)
+    frame = pd.DataFrame({"throttle": [1.0, 0.8, 0.9], "regime_risk": [0.2, 0.4, 0.3]}, index=idx)
+    fig = interactive.time_series_lines(frame, title="Regime tape")
+    assert len(fig.data) == 2
+    assert fig.layout.hovermode == "x unified"
+
+
+@pytest.mark.skipif(not interactive.available(), reason="Plotly is not installed")
+def test_factor_ic_scatter_builds_reliability_map():
+    factors = pd.DataFrame(
+        {
+            "pm_state": ["promote", "watch"],
+            "stage": ["proven", "shadow"],
+            "weight": [0.8, 0.2],
+            "ic_ir": [1.2, -0.1],
+            "coverage": [0.9, 0.4],
+            "mean_ic": [0.03, -0.005],
+            "hit_rate": [0.57, 0.49],
+            "observations": [250, 120],
+        },
+        index=["residual_breakout", "liquidity_squeeze"],
+    )
+    fig = interactive.factor_ic_scatter(factors)
+    assert len(fig.data) >= 1
+    assert fig.layout.xaxis.title.text == "Coverage"
+
+
+@pytest.mark.skipif(not interactive.available(), reason="Plotly is not installed")
+def test_strategy_shadow_mix_builds_stacked_bar():
+    coverage = pd.DataFrame(
+        {
+            "proven_factors": [4, 2],
+            "shadow_factors": [1, 3],
+        },
+        index=["core", "frontier"],
+    )
+    fig = interactive.strategy_shadow_mix(coverage)
+    assert len(fig.data) >= 1
+    assert fig.layout.yaxis.title.text == "Factor count"
+
+
+@pytest.mark.skipif(not interactive.available(), reason="Plotly is not installed")
 def test_multi_equity_builds_traces():
     idx = pd.bdate_range("2026-01-01", periods=5)
     curves = {
