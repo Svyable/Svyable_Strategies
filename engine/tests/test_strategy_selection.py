@@ -28,6 +28,9 @@ from svyable.strategy_selector import (
 )
 
 
+STRATEGY_FACTOR_SMOKE_DAYS = 900
+
+
 def test_registry_contains_distinct_complete_strategies():
     registry = registry_frame()
     assert len(registry) >= 6
@@ -42,13 +45,31 @@ def test_registry_contains_distinct_complete_strategies():
     )
 
 
+def _last_valid_summary(frame: pd.DataFrame) -> dict[str, object]:
+    valid = frame.notna().any(axis=1)
+    if not valid.any():
+        return {"ever_valid": False, "last_valid_date": None, "valid_rows": 0}
+    last_valid = valid[valid].index[-1]
+    return {
+        "ever_valid": True,
+        "last_valid_date": str(last_valid.date() if hasattr(last_valid, "date") else last_valid),
+        "valid_rows": int(valid.sum()),
+    }
+
+
 def test_every_strategy_builds_and_computes_factors():
     """Every registered strategy must build a valid config and have all of its
     declared factors wired to the live factor library and computable non-empty.
-    Guards new factors/strategies against silent drift from the registry."""
+
+    Some strategy-specific factors intentionally require long burn-ins: residual
+    beta windows, skipped 12-1 momentum, downside-market filters, and trailing
+    resilience regimes stack several rolling windows. The smoke fixture therefore
+    uses a warmed synthetic panel rather than a minimal speed fixture; the smaller
+    candidate-board tests below still cover runtime plumbing on short panels.
+    """
     from svyable import factor_library as flib
 
-    panel = SyntheticProvider(n_assets=30, n_days=420, seed=5).get_panel()
+    panel = SyntheticProvider(n_assets=30, n_days=STRATEGY_FACTOR_SMOKE_DAYS, seed=5).get_panel()
     available = set(flib.factor_metadata().index)
     specs = list_strategies(include_experimental=True)
     assert len(specs) >= 12
@@ -61,7 +82,13 @@ def test_every_strategy_builds_and_computes_factors():
         scores = flib.compute_all(panel, cfg, names=list(spec.factor_names))
         for name in spec.factor_names:
             assert name in scores, (spec.strategy_id, name)
-            assert scores[name].iloc[-1].notna().any(), (spec.strategy_id, name)
+            latest_has_signal = scores[name].iloc[-1].notna().any()
+            assert latest_has_signal, {
+                "strategy_id": spec.strategy_id,
+                "factor": name,
+                "panel_days": STRATEGY_FACTOR_SMOKE_DAYS,
+                "summary": _last_valid_summary(scores[name]),
+            }
 
 
 def test_concentrated_flagship_matches_mandate():
