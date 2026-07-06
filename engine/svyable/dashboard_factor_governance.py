@@ -5,8 +5,10 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from svyable import dashboard_interactive as interactive
 from svyable.alpha_gui_model import alpha_dashboard_metrics, alpha_factor_table, alpha_strategy_cards
 from svyable.dashboard_service import DashboardService
+from svyable.dashboard_ui import render_plotly
 from svyable.factor_library import factor_metadata
 from svyable.factor_monitor import load_factor_monitor
 from svyable.strategy_registry import list_strategies
@@ -88,7 +90,10 @@ def _render_alpha_spotlight(catalog: pd.DataFrame) -> None:
         st.markdown("**Alpha strategy cards**")
         st.dataframe(strategies, use_container_width=True, hide_index=True)
         chart = strategies.set_index("strategy_id")[["alpha_family_factors", "total_factors", "shadow_factors"]]
-        st.bar_chart(chart, use_container_width=True)
+        if interactive.available():
+            render_plotly(interactive.matrix_heatmap(chart.T, title="Alpha strategy factor mix", z_format=".0f", colorscale="Blues"))
+        else:
+            st.bar_chart(chart, use_container_width=True)
 
     factors = alpha_factor_table(catalog)
     if not factors.empty:
@@ -99,7 +104,10 @@ def _render_alpha_spotlight(catalog: pd.DataFrame) -> None:
         with right:
             counts = factors.groupby(["family", "stage"]).size().unstack(fill_value=0)
             st.markdown("**Family maturity mix**")
-            st.bar_chart(counts, use_container_width=True)
+            if interactive.available():
+                render_plotly(interactive.matrix_heatmap(counts, title="Family maturity mix", z_format=".0f", colorscale="Blues"))
+            else:
+                st.bar_chart(counts, use_container_width=True)
 
 
 def _render_registry_quality() -> None:
@@ -168,6 +176,9 @@ def render_factor_governance(service: DashboardService) -> None:
         cols[2].metric("Shadow", int(stages.get("shadow", 0)))
         cols[3].metric("Used by registry", used)
         cols[4].metric("Unused", int(len(catalog_view) - used))
+        if interactive.available() and {"family", "stage"} <= set(catalog_view.columns):
+            maturity = catalog_view.groupby(["family", "stage"]).size().unstack(fill_value=0)
+            render_plotly(interactive.matrix_heatmap(maturity, title="Catalog family × maturity", z_format=".0f", colorscale="Blues"))
         with st.expander("Factor catalog"):
             st.dataframe(catalog_view, use_container_width=True)
 
@@ -187,7 +198,10 @@ def render_factor_governance(service: DashboardService) -> None:
             coverage = _strategy_coverage(strategy_usage, catalog)
             if not coverage.empty:
                 st.caption("Frontier watch flags strategies whose factor pack is at least 40% shadow/incubation factors.")
-                st.dataframe(coverage.sort_values(["frontier_watch", "shadow_ratio", "factors"], ascending=False), use_container_width=True)
+                ranked_coverage = coverage.sort_values(["frontier_watch", "shadow_ratio", "factors"], ascending=False)
+                st.dataframe(ranked_coverage, use_container_width=True)
+                if interactive.available():
+                    render_plotly(interactive.strategy_shadow_mix(ranked_coverage))
             else:
                 st.dataframe(strategy_usage.drop(columns=["factor_names"], errors="ignore"), use_container_width=True)
 
@@ -225,4 +239,6 @@ def render_factor_governance(service: DashboardService) -> None:
         table = frame[columns]
         if "weight" in table:
             table = table.sort_values("weight", ascending=False)
+        if interactive.available() and {"ic_ir", "coverage"} <= set(table.columns):
+            render_plotly(interactive.factor_ic_scatter(table, title=f"{sleeve_name.title()} factor IC reliability"))
         st.dataframe(table, use_container_width=True)

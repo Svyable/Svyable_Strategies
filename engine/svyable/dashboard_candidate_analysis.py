@@ -20,9 +20,10 @@ import pandas as pd
 import streamlit as st
 
 from svyable import dashboard_charts as charts
+from svyable import dashboard_interactive as interactive
 from svyable.dashboard_data import clean_returns, load_candidate_timeseries
 from svyable.dashboard_stack import render_position_stack
-from svyable.dashboard_ui import render_figure
+from svyable.dashboard_ui import render_figure, render_plotly
 from svyable.strategy_selection_service import StrategySelectionService
 
 
@@ -44,6 +45,27 @@ def _metric_row(board_row: pd.Series | None) -> None:
     cols[3].metric("Return 252d", _fmt(board_row.get("return_252d"), pct=True))
     cols[4].metric("Sharpe 252d", _fmt(board_row.get("sharpe_252d")))
     cols[5].metric("Max drawdown", _fmt(board_row.get("recent_max_drawdown"), pct=True))
+
+
+def _drawdown(returns: pd.Series) -> pd.Series:
+    nav = (1.0 + returns.fillna(0.0)).cumprod()
+    return nav / nav.cummax() - 1.0
+
+
+def _rolling_hit_rate(returns: pd.Series, window: int = 63) -> pd.Series:
+    clean = returns.dropna().astype(float)
+    return (clean > 0).rolling(window).mean().dropna()
+
+
+def _monthly_matrix(returns: pd.Series) -> pd.DataFrame:
+    monthly = (1.0 + returns.dropna().astype(float)).resample("ME").prod() - 1.0
+    if monthly.empty:
+        return pd.DataFrame()
+    frame = monthly.to_frame("return")
+    frame["year"] = frame.index.year.astype(str)
+    frame["month"] = frame.index.strftime("%b")
+    order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    return frame.pivot(index="year", columns="month", values="return").reindex(columns=order)
 
 
 def render_candidate_analytics(
@@ -112,25 +134,49 @@ def render_candidate_analytics(
         if returns.empty:
             st.caption("No return history (`pnl_diag.csv`) for this candidate yet.")
         else:
-            render_figure(
-                charts.cumulative_return_chart(
-                    returns,
-                    benchmark if not benchmark.empty else None,
-                    title=f"{candidate} — cumulative return",
+            if interactive.available():
+                overlay = {candidate: returns}
+                if not benchmark.empty:
+                    overlay["benchmark"] = benchmark
+                render_plotly(interactive.multi_equity(overlay, highlight=candidate, title=f"{candidate} — cumulative return"))
+                left, right = st.columns(2)
+                with left:
+                    render_plotly(interactive.drawdown_tape(pd.DataFrame({candidate: _drawdown(returns)}), title="Drawdown"))
+                with right:
+                    hit_rate = _rolling_hit_rate(returns)
+                    if hit_rate.empty:
+                        st.caption("Need more return history for rolling hit rate.")
+                    else:
+                        render_plotly(interactive.time_series_lines(hit_rate.to_frame("rolling_hit_rate"), title="Rolling hit rate", y_title="Hit rate"))
+                if len(returns) >= 40:
+                    monthly = _monthly_matrix(returns)
+                    if not monthly.empty:
+                        render_plotly(interactive.matrix_heatmap(monthly, title=f"{candidate} — monthly returns", z_format=".1%"))
+                render_plotly(interactive.return_distribution(returns, title=f"{candidate} — return distribution"))
+            else:
+                render_figure(
+                    charts.cumulative_return_chart(
+                        returns,
+                        benchmark if not benchmark.empty else None,
+                        title=f"{candidate} — cumulative return",
+                    )
                 )
-            )
-            left, right = st.columns(2)
-            with left:
-                render_figure(charts.drawdown_chart(returns, title="Drawdown"))
-            with right:
-                render_figure(charts.rolling_hit_rate_chart(returns))
-            if len(returns) >= 40:
-                render_figure(charts.monthly_returns_heatmap(returns))
-            render_figure(charts.return_distribution_chart(returns))
+                left, right = st.columns(2)
+                with left:
+                    render_figure(charts.drawdown_chart(returns, title="Drawdown"))
+                with right:
+                    render_figure(charts.rolling_hit_rate_chart(returns))
+                if len(returns) >= 40:
+                    render_figure(charts.monthly_returns_heatmap(returns))
+                render_figure(charts.return_distribution_chart(returns))
 
     with exposure_tab:
         if not diag.empty and {"gross_exposure", "turnover"} & set(diag.columns):
-            render_figure(charts.exposure_turnover_chart(diag, title=f"{candidate} — exposure & turnover"))
+            if interactive.available():
+                cols = [col for col in ["gross_exposure", "turnover", "net_exposure", "cash"] if col in diag.columns]
+                render_plotly(interactive.time_series_lines(diag[cols], title=f"{candidate} — exposure & turnover"))
+            else:
+                render_figure(charts.exposure_turnover_chart(diag, title=f"{candidate} — exposure & turnover"))
         else:
             st.caption("No exposure/turnover columns in this candidate's diagnostics.")
         if not weights_history.empty:
@@ -142,9 +188,15 @@ def render_candidate_analytics(
         if sleeve_weights.empty and ic_health.empty:
             st.caption("No sleeve or IC-health artifacts for this candidate.")
         if not sleeve_weights.empty:
-            render_figure(charts.sleeve_trust_area_chart(sleeve_weights, title=f"{candidate} — sleeve allocation over time"))
+            if interactive.available():
+                render_plotly(interactive.time_series_lines(sleeve_weights, title=f"{candidate} — sleeve allocation over time"))
+            else:
+                render_figure(charts.sleeve_trust_area_chart(sleeve_weights, title=f"{candidate} — sleeve allocation over time"))
         if not ic_health.empty:
-            render_figure(charts.ic_health_heatmap(ic_health, title=f"{candidate} — smoothed IC health over time"))
+            if interactive.available():
+                render_plotly(interactive.matrix_heatmap(ic_health.T, title=f"{candidate} — smoothed IC health over time", z_format=".2f"))
+            else:
+                render_figure(charts.ic_health_heatmap(ic_health, title=f"{candidate} — smoothed IC health over time"))
 
     with regime_tab:
         regime = load_candidate_timeseries(output_root, board, candidate, "regime.csv", numeric=True)
@@ -157,6 +209,9 @@ def render_candidate_analytics(
                     "Regime tape shared by the market panel: budget throttle, turbulence "
                     "and absorption percentiles, breadth, and composite regime risk."
                 )
-                st.line_chart(regime[columns].tail(252))
+                if interactive.available():
+                    render_plotly(interactive.time_series_lines(regime[columns].tail(252), title=f"{candidate} — regime tape"))
+                else:
+                    st.line_chart(regime[columns].tail(252))
             else:
                 st.dataframe(regime.tail(60), use_container_width=True)
