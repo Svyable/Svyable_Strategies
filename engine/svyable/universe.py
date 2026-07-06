@@ -25,7 +25,7 @@ import pandas as pd
 def fetch_active_equities(broker_or_client, listed_market: str = "XNAS",
                           per_page: int = 1000, max_pages: int = 30) -> list[dict]:
     """All active equities on `listed_market` right now. Accepts a
-    TastytradeBroker or TastytradeClient (anything with .request or .c.request)."""
+    TastytradeClient — or anything exposing `.request` or `.c.request`."""
     c = getattr(broker_or_client, "c", broker_or_client)
     out: list[dict] = []
     for page in range(max_pages):

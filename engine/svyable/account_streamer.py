@@ -52,7 +52,7 @@ class AccountStreamer:
                      terminal: frozenset | None = None) -> dict[int, dict]:
         """Block until every order id reaches a terminal status (or timeout).
         Returns {order_id: last order json}. Push-based — zero REST polling."""
-        from svyable.tastytrade import TERMINAL_ORDER_STATUSES
+        from svyable.tastytrade_sdk import TERMINAL_ORDER_STATUSES
         terminal = terminal or TERMINAL_ORDER_STATUSES
         pending = set(order_ids)
         seen: dict[int, dict] = {}
