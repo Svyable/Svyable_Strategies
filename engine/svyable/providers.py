@@ -3,8 +3,9 @@ with the same two methods emitting the same Panel + parquet cache format:
 
   YFinanceProvider  — EOD OHLCV, auto_adjust=True => ADJ_TOTAL_RETURN (deep,
                       free, dividend-adjusted). The backfill + validation oracle.
-  TastytradeProvider — DXLink daily candles => ADJ_SPLIT_ONLY (one vendor for
-                      broker AND data, but NOT dividend-adjusted; live/tail feed).
+  TastytradeProvider — DXLink daily candles => ADJ_SPLIT_ONLY (same vendor auth
+                      family as execution, but data-only and NOT dividend-adjusted;
+                      live/tail feed).
   SyntheticProvider  — deterministic, offline.
 
 Adjustment regime (Panel.meta["adjustment"]): the two real feeds are NOT
@@ -205,9 +206,12 @@ def panel_parity(a: Panel, b: Panel, tol: float = 0.002) -> dict:
 
 
 class TastytradeProvider:
-    """Daily OHLCV via tastytrade's DXLink candle feed — broker and data from
-    one vendor, one auth. Same parquet cache format as YFinanceProvider,
-    separate cache dir.
+    """Daily OHLCV via tastytrade's DXLink candle feed.
+
+    This is a data provider only. It shares the same credential family as the
+    Tastytrade SDK execution adapter, but it does not route, manage, cancel, or
+    reconcile orders. Same parquet cache format as YFinanceProvider, separate
+    cache dir.
 
     Auth: the tastytrade env vars (see svyable.tastytrade). Streaming quote
     tokens require a full tastytrade customer account.
