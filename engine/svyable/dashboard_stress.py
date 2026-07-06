@@ -14,8 +14,9 @@ import pandas as pd
 import streamlit as st
 
 from svyable import dashboard_charts as charts
+from svyable import dashboard_interactive as interactive
 from svyable.dashboard_compare import aligned_returns, metrics_matrix
-from svyable.dashboard_ui import percent, render_figure
+from svyable.dashboard_ui import percent, render_figure, render_plotly
 from svyable.metrics import perf_summary
 
 ANN = 252.0
@@ -138,6 +139,13 @@ def _monthly_matrix(frame: pd.DataFrame) -> pd.DataFrame:
     return monthly.tail(18).T
 
 
+def _render_signed_bar(series: pd.Series, *, title: str, xlabel: str) -> None:
+    if interactive.available():
+        render_plotly(interactive.signed_bar(series, title=title, xlabel=xlabel))
+    else:
+        render_figure(charts.signed_bar_chart(series.sort_values(), title=title, xlabel=xlabel))
+
+
 def render_stress_lab(
     curves: dict[str, pd.Series],
     board: pd.DataFrame | None = None,
@@ -180,30 +188,31 @@ def render_stress_lab(
 
         left, right = st.columns(2)
         with left:
-            render_figure(
-                charts.signed_bar_chart(
-                    stress["stress_mean"].sort_values(),
-                    title="Average return on red-market days",
-                    xlabel="Daily return",
-                )
+            _render_signed_bar(
+                stress["stress_mean"].sort_values(),
+                title="Average return on red-market days",
+                xlabel="Daily return",
             )
         with right:
-            render_figure(
-                charts.signed_bar_chart(
-                    stress["max_dd"].sort_values(),
-                    title="Maximum drawdown by candidate",
-                    xlabel="Drawdown",
-                )
+            _render_signed_bar(
+                stress["max_dd"].sort_values(),
+                title="Maximum drawdown by candidate",
+                xlabel="Drawdown",
             )
 
     st.subheader("Drawdown tape")
     drawdowns = pd.concat({name: _drawdown(frame[name]) for name in frame.columns}, axis=1)
-    st.line_chart(drawdowns.tail(504))
+    if interactive.available():
+        render_plotly(interactive.drawdown_tape(drawdowns.tail(504)))
+    else:
+        st.line_chart(drawdowns.tail(504))
 
     st.subheader("Monthly candidate heatmap")
     monthly = _monthly_matrix(frame)
     if monthly.empty:
         st.caption("No monthly candidate matrix yet.")
+    elif interactive.available():
+        render_plotly(interactive.matrix_heatmap(monthly, title="Monthly candidate returns", z_format=".1%"))
     else:
         st.dataframe(
             monthly.style.format("{:.1%}").background_gradient(cmap="RdYlGn", axis=None),
@@ -247,5 +256,9 @@ def render_stress_lab(
 
     overlay = {name: frame[name] for name in picks}
     overlay["what_if_blend"] = blend
-    render_figure(charts.multi_equity_chart(overlay, highlight="what_if_blend", title="What-if blend vs components"))
-    render_figure(charts.drawdown_chart(blend, title="What-if blend drawdown"))
+    if interactive.available():
+        render_plotly(interactive.multi_equity(overlay, highlight="what_if_blend", title="What-if blend vs components"))
+        render_plotly(interactive.drawdown_tape(pd.DataFrame({"what_if_blend": _drawdown(blend)}), title="What-if blend drawdown"))
+    else:
+        render_figure(charts.multi_equity_chart(overlay, highlight="what_if_blend", title="What-if blend vs components"))
+        render_figure(charts.drawdown_chart(blend, title="What-if blend drawdown"))
