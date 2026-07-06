@@ -18,14 +18,15 @@ def test_alpha_family_governance_frames_have_expected_tables():
     assert not frames["factors"].empty
     assert "strategy_id" in frames["strategies"].columns
     assert "family" in frames["factors"].columns
+    assert {"downside_resilience", "rotation_breadth"}.issubset(set(frames["factors"]["family"]))
 
 
 def test_alpha_family_summary_rows_are_compact_metrics():
     rows = alpha_family_summary_rows()
     by_metric = {row["metric"]: row["value"] for row in rows}
 
-    assert by_metric["families"] == 3
-    assert by_metric["strategies"] == 3
+    assert by_metric["families"] == 5
+    assert by_metric["strategies"] == 5
     assert by_metric["factors"] > 0
     assert by_metric["status"] in {"PASS", "BLOCK"}
 
