@@ -23,12 +23,22 @@ class SleeveSpec:
 @dataclass(frozen=True)
 class SvyableConfig:
     strategy_id: str = "svyable_nasdaq_lo"
-    version: str = "0.3.0"
+    version: str = "0.3.1"
 
     # ---- universe ----
     min_price: float = 5.0
     min_adv: float = 25e6
     adv_win: int = 21
+
+    # ---- new-listing / sparse-history controls ----
+    cold_start_enabled: bool = True
+    cold_start_min_trading_days: int = 10
+    cold_start_full_trading_days: int = 63
+    cold_start_min_factor_coverage: float = 0.10
+    cold_start_min_cap_mult: float = 0.25
+    cold_start_vol_win: int = 21
+    cold_start_vol_min_periods: int = 5
+    cold_start_vol_cap_floor: float = 0.50
 
     # ---- factor windows ----
     beta_win: int = 126

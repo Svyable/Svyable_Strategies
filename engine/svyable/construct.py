@@ -157,7 +157,8 @@ class ConstructResult:
 
 
 def build_unit_weights(score: pd.DataFrame, returns: pd.DataFrame,
-                       liquidity: pd.DataFrame, cfg: SvyableConfig) -> ConstructResult:
+                       liquidity: pd.DataFrame, cfg: SvyableConfig,
+                       max_pos_mult: pd.DataFrame | None = None) -> ConstructResult:
     S = score.rolling(cfg.score_smooth_win, min_periods=1).mean()
     S = S.where(liquidity > 0)
 
@@ -165,6 +166,11 @@ def build_unit_weights(score: pd.DataFrame, returns: pd.DataFrame,
     n = len(assets)
     Sv = S.to_numpy(dtype=float)
     Rv = returns.to_numpy(dtype=float)
+    if max_pos_mult is None:
+        cap_mult = pd.DataFrame(1.0, index=dates, columns=assets)
+    else:
+        cap_mult = max_pos_mult.reindex(index=dates, columns=assets).fillna(0.0).clip(0.0, 1.0)
+    Mv = cap_mult.to_numpy(dtype=float)
 
     # dispersion z for adaptive seats (causal: expanding stats)
     disp = S.std(axis=1)
@@ -181,7 +187,8 @@ def build_unit_weights(score: pd.DataFrame, returns: pd.DataFrame,
 
     for t in range(len(dates)):
         s = Sv[t]
-        valid = np.isfinite(s)
+        m = Mv[t]
+        valid = np.isfinite(s) & np.isfinite(m) & (m > 0.0)
         if valid.sum() < cfg.seats_min:
             W[t] = prev
             seats[t] = int((prev > 0).sum())
@@ -213,8 +220,8 @@ def build_unit_weights(score: pd.DataFrame, returns: pd.DataFrame,
 
         tilted = softmax_tilt(base, s, sel, cfg.softmax_tilt_alpha)
 
-        lo = np.where(sel, cfg.min_pos, 0.0)
-        hi = np.where(sel, cfg.max_pos, 0.0)
+        hi = np.where(sel, cfg.max_pos * m, 0.0)
+        lo = np.where(sel, np.minimum(cfg.min_pos, hi), 0.0)
         target = project_capped_simplex(tilted, 1.0, lo, hi)
 
         if cfg.cluster_weight_cap < 1.0 and t >= cfg.cluster_corr_win:
@@ -226,7 +233,7 @@ def build_unit_weights(score: pd.DataFrame, returns: pd.DataFrame,
         if t > 0:
             l1 = np.abs(target - prev).sum()
             if l1 < cfg.no_trade_band:
-                # hold, but stay feasible under today's selection
+                # hold, but stay feasible under today's selection/caps
                 target = project_capped_simplex(prev, 1.0, lo, hi) if prev.sum() > 0 else target
                 held[t] = 1.0
             else:
