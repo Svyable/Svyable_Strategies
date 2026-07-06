@@ -13,7 +13,7 @@ dependencies = [
 data = ["yfinance>=0.2.40", "websocket-client>=1.7", "requests>=2.31"]
 ml = ["scikit-learn>=1.4"]
 hrp = ["scipy>=1.11"]
-gui = ["streamlit>=1.36", "matplotlib>=3.8", "plotly==6.4.0", "watchdog>=4.0"]
+gui = ["streamlit>=1.36", "matplotlib>=3.8", "plotly==5.24.1", "watchdog>=4.0"]
 broker = ["tastytrade>=13,<14", "python-dotenv>=1.0"]
 dev = ["pytest>=8.0"]
 # Self-referencing extra: the single source of truth for each dependency is its
