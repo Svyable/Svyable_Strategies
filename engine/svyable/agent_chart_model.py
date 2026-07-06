@@ -5,7 +5,20 @@ from __future__ import annotations
 from typing import Any
 
 
-ALPHA_STRATEGY_IDS = {"svyable_alpha_catalyst", "svyable_tape_acceleration"}
+ALPHA_STRATEGY_IDS = {
+    "svyable_alpha_catalyst",
+    "svyable_tape_acceleration",
+    "svyable_leadership_quality",
+    "svyable_downside_resilience",
+    "svyable_rotation_breadth",
+}
+ALPHA_STRATEGY_FAMILY = {
+    "svyable_alpha_catalyst": "Alpha Catalyst",
+    "svyable_tape_acceleration": "Tape Acceleration",
+    "svyable_leadership_quality": "Leadership Quality",
+    "svyable_downside_resilience": "Downside Resilience",
+    "svyable_rotation_breadth": "Rotation Breadth",
+}
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -61,7 +74,7 @@ def _candidate_score(item: dict[str, Any], key: str) -> float:
 
 
 def alpha_candidate_rows(context: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return Alpha Catalyst/Tape Acceleration rows from the ranked candidate trace."""
+    """Return alpha-family rows from the ranked candidate trace."""
     trace = context.get("meta_decision_trace", {}) or {}
     allowed = set(str(item) for item in ((context.get("rails", {}) or {}).get("allowed_candidate_ids", []) or []))
     rows: list[dict[str, Any]] = []
@@ -74,7 +87,7 @@ def alpha_candidate_rows(context: dict[str, Any]) -> list[dict[str, Any]]:
             "rank": rank,
             "candidate_id": candidate,
             "strategy_id": strategy_id,
-            "family": "Alpha Catalyst" if strategy_id == "svyable_alpha_catalyst" else "Tape Acceleration",
+            "family": ALPHA_STRATEGY_FAMILY.get(strategy_id, strategy_id),
             "eligible": bool(item.get("eligible")),
             "allowed": candidate in allowed,
             "action": str(item.get("action", "")),
