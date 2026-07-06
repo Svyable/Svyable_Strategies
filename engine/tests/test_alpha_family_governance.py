@@ -23,6 +23,7 @@ def test_alpha_family_factor_rows_include_all_families():
     families = {row["family"] for row in rows}
 
     assert set(ALPHA_FAMILIES) == families
+    assert {"downside_resilience", "rotation_breadth"}.issubset(families)
     assert len(rows) == sum(len(factors) for factors in ALPHA_FAMILIES.values())
     assert all(row["stage"] in {"proven", "shadow", "unknown"} for row in rows)
 
@@ -34,7 +35,11 @@ def test_alpha_family_strategy_rows_include_new_books():
     assert "svyable_alpha_catalyst" in by_id
     assert "svyable_tape_acceleration" in by_id
     assert "svyable_leadership_quality" in by_id
+    assert "svyable_downside_resilience" in by_id
+    assert "svyable_rotation_breadth" in by_id
     assert by_id["svyable_leadership_quality"]["minimum_hold_days"] >= 4
+    assert by_id["svyable_downside_resilience"]["minimum_hold_days"] >= 5
+    assert by_id["svyable_rotation_breadth"]["minimum_hold_days"] >= 3
 
 
 def test_alpha_family_report_markdown_and_writer(tmp_path):
@@ -43,7 +48,7 @@ def test_alpha_family_report_markdown_and_writer(tmp_path):
     written = write_alpha_family_governance(tmp_path)
 
     assert report["status"] in {"PASS", "BLOCK"}
-    assert report["strategy_count"] == 3
+    assert report["strategy_count"] == len(ALPHA_FAMILIES)
     assert markdown.startswith("# Alpha-Family Governance Report")
     assert Path(written["json_path"]).exists()
     assert Path(written["markdown_path"]).exists()
