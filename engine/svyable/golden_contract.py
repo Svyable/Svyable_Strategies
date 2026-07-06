@@ -1,9 +1,9 @@
 """Golden regression contract helpers.
 
 The CI golden is a reproducibility fixture, not a claim that the strategy is the
-best live-capital choice. Keeping the contract in one small JSON document makes
-it obvious which strategy/config is pinned and gives the Streamlit GUI a safe way
-to propose or change the golden candidate deliberately.
+best portfolio choice. Keeping the contract in one small JSON document makes it
+obvious which strategy/config is pinned and gives the Streamlit GUI a safe way to
+change the golden candidate deliberately.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ DEFAULT_CONTRACT: dict[str, Any] = {
     "label": "Base Nasdaq LO deterministic fixture",
     "reason": (
         "Default CI behavior contract: stable, ML-off, synthetic, and small enough "
-        "to make every behavioral change explicit. This is not a live-capital ranking."
+        "to make every behavioral change explicit. This is not a portfolio ranking."
     ),
     "provider": DEFAULT_PROVIDER,
     "fixture_overrides": DEFAULT_FIXTURE_OVERRIDES,
@@ -48,13 +48,16 @@ def default_contract_path() -> Path:
 def load_golden_contract(path: str | Path | None = None) -> dict[str, Any]:
     contract_path = Path(path) if path is not None else default_contract_path()
     if not contract_path.exists():
-        return dict(DEFAULT_CONTRACT)
-    payload = json.loads(contract_path.read_text())
+        payload: dict[str, Any] = {}
+    else:
+        payload = json.loads(contract_path.read_text())
     merged = dict(DEFAULT_CONTRACT)
     merged.update(payload)
     merged["provider"] = {**DEFAULT_PROVIDER, **dict(payload.get("provider", {}))}
+    kind = str(merged.get("kind", "base_config"))
+    override_defaults = DEFAULT_FIXTURE_OVERRIDES if kind == "base_config" else {}
     merged["fixture_overrides"] = {
-        **DEFAULT_FIXTURE_OVERRIDES,
+        **override_defaults,
         **dict(payload.get("fixture_overrides", {})),
     }
     return merged
