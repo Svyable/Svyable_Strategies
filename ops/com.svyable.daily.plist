@@ -2,16 +2,27 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Svyable daily weights job — weekdays 07:30 (machine local time).
-  launchd has no timezone support: the Hour below assumes the Mac is set to
-  America/New_York. If not, adjust Hour so the run lands 07:00-07:45 ET.
-  launchd also runs missed jobs on wake if the lid was closed at 07:30.
+  Svyable daily PM selector/context-pack job.
 
-  Install:
+  Default schedule: weekdays 06:30 America/Chicago, which lands at
+  07:30 America/New_York for the pre-market PM review window. launchd has no
+  timezone field; it uses the Mac's local clock. If this Mac is set to Eastern
+  time, change Hour to 7. If it is set to Pacific time, change Hour to 4.
+
+  Scope:
+    - runs ops/run_daily.sh;
+    - refreshes data, evaluates candidates, writes the agent context pack;
+    - does NOT write PM decisions, activate portfolios, or submit orders.
+
+  Install / refresh:
     cp ops/com.svyable.daily.plist ~/Library/LaunchAgents/
+    launchctl unload ~/Library/LaunchAgents/com.svyable.daily.plist 2>/dev/null || true
     launchctl load ~/Library/LaunchAgents/com.svyable.daily.plist
+
   Verify:
     launchctl list | grep svyable
+    tail -n 200 /tmp/com.svyable.daily.out
+    tail -n 200 /tmp/com.svyable.daily.err
 -->
 <plist version="1.0">
 <dict>
@@ -22,17 +33,38 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>$HOME/Svyable_Strategies/ops/run_daily.sh</string>
+    <string>exec /bin/zsh "$HOME/Svyable_Strategies/ops/run_daily.sh"</string>
   </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <key>SVYABLE_ENV</key>
+    <string>sandbox</string>
+    <key>SVYABLE_PROVIDER</key>
+    <string>yf</string>
+    <key>SVYABLE_OUTPUT_ROOT</key>
+    <string>outputs</string>
+    <key>SVYABLE_START_DATE</key>
+    <string>2020-01-01</string>
+    <key>SVYABLE_STRICT_DAILY</key>
+    <string>true</string>
+  </dict>
 
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
   </array>
+
+  <key>RunAtLoad</key>
+  <false/>
 
   <key>StandardOutPath</key>
   <string>/tmp/com.svyable.daily.out</string>
@@ -41,5 +73,7 @@
 
   <key>ProcessType</key>
   <string>Standard</string>
+  <key>ThrottleInterval</key>
+  <integer>600</integer>
 </dict>
 </plist>
