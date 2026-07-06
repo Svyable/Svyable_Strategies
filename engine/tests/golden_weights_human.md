@@ -10,11 +10,29 @@ Single-page validation briefing: what strategy, what risk state, what regime, wh
 - config: `nasdaq_lo_config(min_adv=0, min_price=0, ml_enabled=False, seats_base=15, seats_min=10, seats_max=20)`
 - as-of (synthetic) date: `2020-04-17`
 - positions: `11`  ·  gross book / total weight: `0.81709000`
-- factor universe: `99` factors registered (see §6)
+- factor universe: `99` factors registered (see §7)
 
 > Not a live-capital recommendation. This is the deterministic CI behaviour contract for the pinned synthetic provider/configuration; the weights_hash is the hard regression gate.
 
-## 2 · Risk posture (today)
+## 2 · Holdings (weights contract)
+
+Ticker = deterministic illustrative alias mapped from the synthetic universe (`SYN0NN` → NASDAQ seed order); price paths are synthetic, names are for readability. Synthetic ID is the raw contract key.
+
+| Rank | Ticker | Synthetic ID | Weight | Weight % |
+| ---: | --- | --- | ---: | ---: |
+| 1 | PEP | SYN012 | 0.12256350 | 12.2564% |
+| 2 | INTC | SYN032 | 0.12256350 | 12.2564% |
+| 3 | REGN | SYN036 | 0.12256350 | 12.2564% |
+| 4 | QCOM | SYN015 | 0.11264141 | 11.2641% |
+| 5 | KLAC | SYN037 | 0.06968374 | 6.9684% |
+| 6 | ISRG | SYN024 | 0.05783581 | 5.7836% |
+| 7 | TSLA | SYN008 | 0.05356175 | 5.3562% |
+| 8 | ADI | SYN027 | 0.04935727 | 4.9357% |
+| 9 | ADBE | SYN013 | 0.04494853 | 4.4949% |
+| 10 | GOOG | SYN005 | 0.03634857 | 3.6349% |
+| 11 | VRTX | SYN026 | 0.02502242 | 2.5022% |
+
+## 3 · Risk posture (today)
 
 | Control | Value | Setting |
 | --- | ---: | --- |
@@ -25,7 +43,7 @@ Single-page validation briefing: what strategy, what risk state, what regime, wh
 | Circuit breaker | armed (clear) | trip 10.00% dd × 1.500 → lev 0.000 |
 | Seats live / turnover | 11 / 4.60% | no-trade band 4.00% |
 
-## 3 · Regime stack (causal turbulence / breadth / panic)
+## 4 · Regime stack (causal turbulence / breadth / panic)
 
 - modules: turbulence=on (win 504, on≥p90), breadth (win 126), panic (vol z-on 1.0 / dd-on 8.00%)
 
@@ -39,7 +57,7 @@ Single-page validation briefing: what strategy, what risk state, what regime, wh
 | Panic signal | 0.000 | 0 = calm, 1 = full de-risk |
 | **Net regime multiplier** | **0.988** | whole-book exposure scalar (ready=1.000) |
 
-## 4 · Price-action Markov regime (price path only)
+## 5 · Price-action Markov regime (price path only)
 
 First-order Markov chain over vol-standardised daily market returns — *no factors, no fundamentals*. State = today's return in units of trailing 63d volatility, bucketed at z ∈ {-1.5, -0.5, 0.5, 1.5}. Estimated on 578 causal day-to-day transitions.
 
@@ -67,7 +85,7 @@ First-order Markov chain over vol-standardised daily market returns — *no fact
 | → **Up** | 0.062 | 0.191 | 0.383 | 0.265 | 0.099 |
 | **Surge** | 0.042 | 0.167 | 0.417 | 0.312 | 0.062 |
 
-## 5 · Sleeve allocation & live IC health
+## 6 · Sleeve allocation & live IC health
 
 Sleeves are meta-learned by trailing information coefficient; an untrusted (shadow) sleeve is allowed to bleed to zero, a proven sleeve keeps an anti-collapse floor.
 
@@ -79,7 +97,7 @@ Sleeves are meta-learned by trailing information coefficient; an untrusted (shad
 | micro | 0.0948 | -0.105 | 41.27% | -0.013 | 5/21 | 0.20 | proven |
 | ml | — | — | — | — | 21 | 0.00 | shadow · disabled (ml_enabled=False) |
 
-## 6 · Factor stack (what is switched on)
+## 7 · Factor stack (what is switched on)
 
 - **99** factors active — **43 proven** (guaranteed floor 1.20%) + **56 shadow** (no floor; earn weight via IC or decay out).
 
@@ -103,7 +121,7 @@ Sleeves are meta-learned by trailing information coefficient; an untrusted (shad
 - `capm_alpha` (proven, wt 0.040) — Q23 legacy implementation
 - `trend_consistency` (proven, wt 0.039) — Q23 legacy implementation
 
-## 7 · Construction & universe
+## 8 · Construction & universe
 
 - seats: live `11` (adaptive True; base 15, min 10, max 20, disp-slope 4.0)
 - position bounds: max 15.00% / min 0.50% · softmax tilt α 0.60 · seat weighting `score`
@@ -111,19 +129,3 @@ Sleeves are meta-learned by trailing information coefficient; an untrusted (shad
 - cluster caps: corr>0.70 over 126d capped at 40.00%
 - universe filters: price ≥ $0.00 · ADV ≥ $0 over 21d
 - costs assumed: 3.0 bps + 5.00% ADV participation cap
-
-## 8 · Holdings (weights contract)
-
-| Rank | Symbol | Weight | Weight % |
-| ---: | --- | ---: | ---: |
-| 1 | SYN012 | 0.12256350 | 12.2564% |
-| 2 | SYN032 | 0.12256350 | 12.2564% |
-| 3 | SYN036 | 0.12256350 | 12.2564% |
-| 4 | SYN015 | 0.11264141 | 11.2641% |
-| 5 | SYN037 | 0.06968374 | 6.9684% |
-| 6 | SYN024 | 0.05783581 | 5.7836% |
-| 7 | SYN008 | 0.05356175 | 5.3562% |
-| 8 | SYN027 | 0.04935727 | 4.9357% |
-| 9 | SYN013 | 0.04494853 | 4.4949% |
-| 10 | SYN005 | 0.03634857 | 3.6349% |
-| 11 | SYN026 | 0.02502242 | 2.5022% |

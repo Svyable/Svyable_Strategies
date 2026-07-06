@@ -17,11 +17,36 @@ holdings table keeps full precision because it mirrors the CI weights contract.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from svyable import factor_library as flib
 from svyable.markov_regime import MarkovRegime
+
+
+def synthetic_ticker_aliases(symbols, universe_file: str | Path) -> dict[str, str]:
+    """Deterministic display aliases for a synthetic universe.
+
+    Maps ``SYN{i:03d}`` → the i-th real ticker in the NASDAQ seed universe (file
+    order). These are *illustrative labels only* so a synthetic run reads with
+    recognisable names; the underlying price paths are still synthetic. Real-data
+    runs already carry real symbols and need no aliasing.
+    """
+    path = Path(universe_file)
+    if not path.exists():
+        return {}
+    tickers = [ln.strip() for ln in path.read_text().splitlines()
+               if ln.strip() and not ln.lstrip().startswith("#")]
+    out: dict[str, str] = {}
+    for sym in symbols:
+        s = str(sym)
+        if s.startswith("SYN") and s[3:].isdigit():
+            idx = int(s[3:])
+            if 0 <= idx < len(tickers):
+                out[s] = tickers[idx]
+    return out
 
 
 def _last(series, default=float("nan")) -> float:
@@ -48,8 +73,12 @@ def _pct(x, nd=2) -> str:
     return "n/a" if not np.isfinite(v) else f"{v * 100:.{nd}f}%"
 
 
-def holdings_table(res) -> pd.DataFrame:
-    """Latest long book, ranked by weight (the tracked weights contract)."""
+def holdings_table(res, symbol_labels: dict[str, str] | None = None) -> pd.DataFrame:
+    """Latest long book, ranked by weight (the tracked weights contract).
+
+    When ``symbol_labels`` is given, a ``ticker`` column carries the display alias
+    for each raw ``symbol`` (see :func:`synthetic_ticker_aliases`).
+    """
     last = res.weights.index[-1]
     latest = res.weights.loc[last].dropna()
     latest = latest[latest > 0].sort_values(ascending=False)
@@ -57,7 +86,11 @@ def holdings_table(res) -> pd.DataFrame:
     table.insert(0, "rank", range(1, len(table) + 1))
     table["weight"] = table["weight"].astype(float).round(8)
     table["weight_pct"] = (table["weight"] * 100.0).round(4)
-    return table[["rank", "symbol", "weight", "weight_pct"]]
+    cols = ["rank", "symbol", "weight", "weight_pct"]
+    if symbol_labels:
+        table["ticker"] = table["symbol"].map(lambda s: symbol_labels.get(s, s))
+        cols = ["rank", "ticker", "symbol", "weight", "weight_pct"]
+    return table[cols]
 
 
 def _reproducibility(cfg, res, table, *, weights_hash, config_hash,
@@ -76,7 +109,7 @@ def _reproducibility(cfg, res, table, *, weights_hash, config_hash,
         f"- positions: `{len(table)}`  ·  gross book / total weight: "
         f"`{total_weight:.8f}`",
         f"- factor universe: `{len(res.factor_names)}` factors registered "
-        "(see §6)",
+        "(see §7)",
         "",
         "> Not a live-capital recommendation. This is the deterministic CI "
         "behaviour contract for the pinned synthetic provider/configuration; the "
@@ -96,7 +129,7 @@ def _risk_posture(cfg, res) -> list[str]:
     vol_use = "stressed" if (np.isfinite(rvol) and rvol > cfg.target_vol) else "normal"
     kill_state = "TRIPPED ⛔" if kill and kill > 0 else "armed (clear)"
     return [
-        "## 2 · Risk posture (today)",
+        "## 3 · Risk posture (today)",
         "",
         "| Control | Value | Setting |",
         "| --- | ---: | --- |",
@@ -120,7 +153,7 @@ def _risk_posture(cfg, res) -> list[str]:
 
 def _regime_stack(cfg, res) -> list[str]:
     reg = getattr(res.risk, "regime", None)
-    out = ["## 3 · Regime stack (causal turbulence / breadth / panic)", ""]
+    out = ["## 4 · Regime stack (causal turbulence / breadth / panic)", ""]
     toggles = (f"turbulence={'on' if cfg.turbulence_enabled else 'off'} "
                f"(win {cfg.turb_win}, on≥p{int(cfg.turb_on_pct * 100)}), "
                f"breadth (win {cfg.breadth_win}), "
@@ -161,7 +194,7 @@ def _markov_section(mk: MarkovRegime) -> list[str]:
     labels = mk.labels
     edges = ", ".join(_f(e, 1) for e in mk.z_edges)
     out = [
-        "## 4 · Price-action Markov regime (price path only)",
+        "## 5 · Price-action Markov regime (price path only)",
         "",
         "First-order Markov chain over vol-standardised daily market returns — "
         "*no factors, no fundamentals*. State = today's return in units of "
@@ -212,7 +245,7 @@ def _sleeve_section(cfg, res) -> list[str]:
     last = sw.iloc[-1] if len(sw) else pd.Series(dtype=float)
     spec = {s.name: s for s in cfg.sleeves}
     out = [
-        "## 5 · Sleeve allocation & live IC health",
+        "## 6 · Sleeve allocation & live IC health",
         "",
         "Sleeves are meta-learned by trailing information coefficient; an "
         "untrusted (shadow) sleeve is allowed to bleed to zero, a proven sleeve "
@@ -248,7 +281,7 @@ def _factor_section(cfg, res, *, top_n: int = 8) -> list[str]:
     proven = int((sub["stage"] == "proven").sum()) if "stage" in sub.columns else 0
     shadow = len(sub) - proven
     out = [
-        "## 6 · Factor stack (what is switched on)",
+        "## 7 · Factor stack (what is switched on)",
         "",
         f"- **{len(active)}** factors active — **{proven} proven** "
         f"(guaranteed floor {_pct(cfg.factor_min_weight)}) + **{shadow} shadow** "
@@ -291,7 +324,7 @@ def _factor_section(cfg, res, *, top_n: int = 8) -> list[str]:
 def _construction_section(cfg, res) -> list[str]:
     seats = _last(getattr(res.construct, "seats", None))
     return [
-        "## 7 · Construction & universe",
+        "## 8 · Construction & universe",
         "",
         f"- seats: live `{int(seats) if np.isfinite(seats) else 'n/a'}` "
         f"(adaptive {cfg.seats_adaptive}; base {cfg.seats_base}, "
@@ -313,26 +346,44 @@ def _construction_section(cfg, res) -> list[str]:
 
 
 def _holdings_section(table) -> list[str]:
-    rows = [
-        "## 8 · Holdings (weights contract)",
-        "",
-        "| Rank | Symbol | Weight | Weight % |",
-        "| ---: | --- | ---: | ---: |",
-    ]
-    for row in table.to_dict(orient="records"):
-        rows.append(
-            f"| {int(row['rank'])} | {row['symbol']} | "
-            f"{float(row['weight']):.8f} | {float(row['weight_pct']):.4f}% |"
-        )
+    aliased = "ticker" in table.columns
+    rows = ["## 2 · Holdings (weights contract)", ""]
+    if aliased:
+        rows += [
+            "Ticker = deterministic illustrative alias mapped from the synthetic "
+            "universe (`SYN0NN` → NASDAQ seed order); price paths are synthetic, "
+            "names are for readability. Synthetic ID is the raw contract key.",
+            "",
+            "| Rank | Ticker | Synthetic ID | Weight | Weight % |",
+            "| ---: | --- | --- | ---: | ---: |",
+        ]
+        for row in table.to_dict(orient="records"):
+            rows.append(
+                f"| {int(row['rank'])} | {row['ticker']} | {row['symbol']} | "
+                f"{float(row['weight']):.8f} | {float(row['weight_pct']):.4f}% |"
+            )
+    else:
+        rows += ["| Rank | Symbol | Weight | Weight % |",
+                 "| ---: | --- | ---: | ---: |"]
+        for row in table.to_dict(orient="records"):
+            rows.append(
+                f"| {int(row['rank'])} | {row['symbol']} | "
+                f"{float(row['weight']):.8f} | {float(row['weight_pct']):.4f}% |"
+            )
     rows.append("")
     return rows
 
 
 def render_pm_onepager(cfg, res, panel, *, weights_hash: str, config_hash: str,
                        provider_repr: str, config_repr: str,
-                       markov: MarkovRegime | None = None) -> str:
-    """Assemble the full PM one-pager markdown for a completed run."""
-    table = holdings_table(res)
+                       markov: MarkovRegime | None = None,
+                       symbol_labels: dict[str, str] | None = None) -> str:
+    """Assemble the full PM one-pager markdown for a completed run.
+
+    ``symbol_labels`` maps raw symbols to display tickers (see
+    :func:`synthetic_ticker_aliases`); when given, holdings show the ticker.
+    """
+    table = holdings_table(res, symbol_labels)
     parts: list[str] = [
         "# Svyable strategy run — PM one-pager",
         "",
@@ -344,11 +395,11 @@ def render_pm_onepager(cfg, res, panel, *, weights_hash: str, config_hash: str,
     parts += _reproducibility(cfg, res, table, weights_hash=weights_hash,
                               config_hash=config_hash, provider_repr=provider_repr,
                               config_repr=config_repr)
+    parts += _holdings_section(table)        # §2 — book up top, real tickers first
     parts += _risk_posture(cfg, res)
     parts += _regime_stack(cfg, res)
     parts += _markov_section(markov)
     parts += _sleeve_section(cfg, res)
     parts += _factor_section(cfg, res)
     parts += _construction_section(cfg, res)
-    parts += _holdings_section(table)
     return "\n".join(parts).rstrip() + "\n"

@@ -19,7 +19,9 @@ from svyable.providers import SyntheticProvider, detect_restatement
 from svyable.config import nasdaq_lo_config
 from svyable.pipeline import run_pipeline
 from svyable.markov_regime import estimate_price_action_markov
-from svyable.pm_onepager import render_pm_onepager
+from svyable.pm_onepager import render_pm_onepager, synthetic_ticker_aliases
+
+UNIVERSE_SEED = Path(__file__).resolve().parents[1] / "universe_nasdaq_seed.txt"
 
 GOLDEN_FILE = Path(__file__).parent / "golden_weights.json"
 GOLDEN_HUMAN_FILE = Path(__file__).parent / "golden_weights_human.md"
@@ -73,9 +75,11 @@ def _write_golden_snapshot(res, panel, *, weights_hash: str,
     _golden_weights_table(res).to_csv(GOLDEN_CSV_FILE, index=False)
 
     markov = estimate_price_action_markov(panel.market_ret, horizon=5)
+    aliases = synthetic_ticker_aliases(res.weights.columns, UNIVERSE_SEED)
     md = render_pm_onepager(
         _cfg(), res, panel, weights_hash=weights_hash, config_hash=config_hash,
-        provider_repr=PROVIDER_REPR, config_repr=CONFIG_REPR, markov=markov)
+        provider_repr=PROVIDER_REPR, config_repr=CONFIG_REPR, markov=markov,
+        symbol_labels=aliases)
     GOLDEN_HUMAN_FILE.write_text(md)
 
 

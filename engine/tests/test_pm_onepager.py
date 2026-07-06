@@ -9,7 +9,18 @@ from svyable.providers import SyntheticProvider
 from svyable.config import nasdaq_lo_config
 from svyable.pipeline import run_pipeline
 from svyable.markov_regime import estimate_price_action_markov
-from svyable.pm_onepager import render_pm_onepager, holdings_table
+from svyable.pm_onepager import (render_pm_onepager, holdings_table,
+                                 synthetic_ticker_aliases)
+
+UNIVERSE_SEED = Path(__file__).resolve().parents[1] / "universe_nasdaq_seed.txt"
+
+
+def test_synthetic_ticker_aliases_map_by_index():
+    aliases = synthetic_ticker_aliases(["SYN000", "SYN032", "NOTSYN"], UNIVERSE_SEED)
+    assert aliases["SYN000"] == "AAPL"        # first seed line
+    assert aliases["SYN032"] == "INTC"        # index 32 in seed order
+    assert "NOTSYN" not in aliases            # real symbols pass through untouched
+    assert synthetic_ticker_aliases(["SYN000"], "/no/such/file.txt") == {}
 
 
 def _run():
@@ -20,11 +31,15 @@ def _run():
     return cfg, res, panel
 
 
-def _render(cfg, res, panel):
+ALIASES = {"SYN012": "PEP", "SYN032": "INTC", "SYN005": "GOOG"}
+
+
+def _render(cfg, res, panel, symbol_labels=None):
     mk = estimate_price_action_markov(panel.market_ret, horizon=5)
     return render_pm_onepager(cfg, res, panel, weights_hash="deadbeef",
                               config_hash="cafef00d", provider_repr="P()",
-                              config_repr="C()", markov=mk)
+                              config_repr="C()", markov=mk,
+                              symbol_labels=symbol_labels)
 
 
 def test_contains_all_sections():
@@ -33,15 +48,35 @@ def test_contains_all_sections():
     for header in [
         "# Svyable strategy run — PM one-pager",
         "## 1 · Provenance & reproducibility contract",
-        "## 2 · Risk posture",
-        "## 3 · Regime stack",
-        "## 4 · Price-action Markov regime",
-        "## 5 · Sleeve allocation & live IC health",
-        "## 6 · Factor stack",
-        "## 7 · Construction & universe",
-        "## 8 · Holdings (weights contract)",
+        "## 2 · Holdings (weights contract)",
+        "## 3 · Risk posture",
+        "## 4 · Regime stack",
+        "## 5 · Price-action Markov regime",
+        "## 6 · Sleeve allocation & live IC health",
+        "## 7 · Factor stack",
+        "## 8 · Construction & universe",
     ]:
         assert header in md, f"missing section: {header}"
+
+
+def test_holdings_precede_analytics():
+    # Book should sit near the top: holdings section before risk/regime/markov.
+    cfg, res, panel = _run()
+    md = _render(cfg, res, panel)
+    assert md.index("## 2 · Holdings") < md.index("## 3 · Risk posture")
+    assert md.index("## 2 · Holdings") < md.index("## 5 · Price-action Markov")
+
+
+def test_ticker_aliases_render():
+    cfg, res, panel = _run()
+    md = _render(cfg, res, panel, symbol_labels=ALIASES)
+    # Held synthetic symbols that are aliased must show the real ticker AND keep
+    # the synthetic id for traceability.
+    held = set(holdings_table(res)["symbol"])
+    for syn, ticker in ALIASES.items():
+        if syn in held:
+            assert ticker in md and syn in md
+    assert "| Rank | Ticker | Synthetic ID |" in md
 
 
 def test_traces_real_run_values():
