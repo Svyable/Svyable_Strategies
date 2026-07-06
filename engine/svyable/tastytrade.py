@@ -1,4 +1,4 @@
-"""Low-level tastytrade REST client for data/session support.
+"""Low-level tastytrade REST client for OAuth-backed data/session support.
 
 ``TastytradeClient`` remains for paths that still need direct REST transport,
 quote-token retrieval, or DXLink candle support. Order management must use the
@@ -7,7 +7,7 @@ SDK adapter in ``svyable.tastytrade_sdk.TastySdkBroker``.
 Settings are loaded through ``svyable.broker_settings.TastySettings`` so OAuth,
 SDK execution, and REST data transport share one environment contract. Canonical
 ``TASTY_*`` names are preferred; legacy ``TT_*`` aliases remain accepted through
-that settings layer.
+that settings layer for OAuth/account values only.
 
 API conventions honored: mandatory User-Agent, dasherized JSON keys, {"data": ...}
 response envelope, query-array `key[]=` params, 429 backoff, one re-auth on 401.
@@ -27,7 +27,7 @@ __all__ = ["TastytradeClient"]
 
 
 class TastytradeClient:
-    """Low-level REST client with token lifecycle management.
+    """Low-level REST client with OAuth refresh-token lifecycle management.
 
     This client is intentionally transport-only. It is still used by data/session
     paths, including DXLink quote-token and candle workflows, but it is not a
@@ -53,18 +53,11 @@ class TastytradeClient:
             raise RuntimeError("production env requires allow_production=True from the caller")
         self.base = self.settings.api_base
 
-        # OAuth refresh-token transport is canonical. Username/password session
-        # auth remains available for sandbox-only legacy setups.
-        if self.settings.has_oauth_refresh_credentials:
-            self.auth_mode = "oauth"
-        elif self.settings.has_session_credentials:
-            self.auth_mode = "session"
-        else:
+        if not self.settings.has_oauth_refresh_credentials:
             raise RuntimeError(
-                "set TASTY_CLIENT_SECRET/TASTY_REFRESH_TOKEN (OAuth) or "
-                "TASTY_USERNAME/TASTY_PASSWORD (sandbox session) in the environment"
+                "set TASTY_CLIENT_SECRET/TASTY_REFRESH_TOKEN (OAuth) in the environment"
             )
-
+        self.auth_mode = "oauth"
         self._token: str = ""
         self._token_expiry: float = 0.0
 
@@ -72,30 +65,21 @@ class TastytradeClient:
 
     def _authenticate(self) -> None:
         import requests
-        if self.auth_mode == "oauth":
-            r = requests.post(f"{self.base}/oauth/token", json={
-                "grant_type": "refresh_token",
-                "refresh_token": self.settings.refresh_token,
-                "client_id": self.settings.client_id,
-                "client_secret": self.settings.client_secret,
-            }, headers={"User-Agent": USER_AGENT}, timeout=15)
-            r.raise_for_status()
-            js = r.json()
-            self._token = js["access_token"]
-            self._token_expiry = time.time() + float(js.get("expires_in", 900)) - 60
-        else:
-            r = requests.post(f"{self.base}/sessions", json={
-                "login": self.settings.username, "password": self.settings.password,
-                "remember-me": True,
-            }, headers={"User-Agent": USER_AGENT}, timeout=15)
-            r.raise_for_status()
-            self._token = r.json()["data"]["session-token"]
-            self._token_expiry = time.time() + 23 * 3600   # session tokens ~24h
+        r = requests.post(f"{self.base}/oauth/token", json={
+            "grant_type": "refresh_token",
+            "refresh_token": self.settings.refresh_token,
+            "client_id": self.settings.client_id,
+            "client_secret": self.settings.client_secret,
+        }, headers={"User-Agent": USER_AGENT}, timeout=15)
+        r.raise_for_status()
+        js = r.json()
+        self._token = js["access_token"]
+        self._token_expiry = time.time() + float(js.get("expires_in", 900)) - 60
 
     def _auth_header(self) -> str:
         if not self._token or time.time() >= self._token_expiry:
             self._authenticate()
-        return f"Bearer {self._token}" if self.auth_mode == "oauth" else self._token
+        return f"Bearer {self._token}"
 
     # ---- transport ----------------------------------------------------------
 
