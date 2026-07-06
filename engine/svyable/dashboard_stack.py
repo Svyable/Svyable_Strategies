@@ -15,9 +15,10 @@ import pandas as pd
 import streamlit as st
 
 from svyable import dashboard_charts as charts
+from svyable import dashboard_interactive as interactive
 from svyable.dashboard_compare import average_pairwise_correlation
 from svyable.dashboard_data import numeric_timeseries
-from svyable.dashboard_ui import percent, render_figure
+from svyable.dashboard_ui import percent, render_figure, render_plotly
 
 _EPS = 1e-9
 
@@ -95,14 +96,22 @@ def render_position_stack(weights_history: pd.DataFrame) -> None:
     tail_days = controls[1].slider("Lookback (days)", 60, min(756, len(matrix)), min(252, len(matrix)), step=21)
 
     trimmed = top_names_matrix(matrix, top_n=top_n, tail_days=tail_days)
-    render_figure(charts.position_heatmap(trimmed))
+    if interactive.available():
+        # Transpose so the Plotly y-axis matches the PM mental model: rows are names,
+        # columns are dates, and hover reveals the exact historical target weight.
+        render_plotly(interactive.matrix_heatmap(trimmed.T, title="Position stack", z_format=".2%"))
+    else:
+        render_figure(charts.position_heatmap(trimmed))
 
     left, right = st.columns(2)
     with left:
         st.subheader("Holding consistency")
         st.caption("Share of the lookback each name was held — durability of conviction.")
         freq = participation_frequency(matrix, tail_days=tail_days).head(top_n)
-        st.bar_chart(freq)
+        if interactive.available():
+            render_plotly(interactive.signed_bar(freq.sort_values(), title="Holding consistency", xlabel="Share of lookback held"))
+        else:
+            st.bar_chart(freq)
     with right:
         st.subheader("Invested vs. cash")
         cash = cash_exposure(matrix).tail(tail_days)
@@ -126,10 +135,13 @@ def render_overlap(latest_weights: dict[str, pd.Series]) -> None:
     )
     avg = average_pairwise_correlation(table)
     st.metric("Average pairwise overlap", f"{avg:.2f}")
-    try:
-        st.dataframe(
-            table.style.background_gradient(cmap="RdYlGn_r", vmin=0.0, vmax=1.0).format("{:.2f}"),
-            use_container_width=True,
-        )
-    except Exception:
-        st.dataframe(table.round(2), use_container_width=True)
+    if interactive.available():
+        render_plotly(interactive.matrix_heatmap(table, title="Candidate position-overlap heatmap", z_format=".2f", colorscale="RdYlGn_r"))
+    else:
+        try:
+            st.dataframe(
+                table.style.background_gradient(cmap="RdYlGn_r", vmin=0.0, vmax=1.0).format("{:.2f}"),
+                use_container_width=True,
+            )
+        except Exception:
+            st.dataframe(table.round(2), use_container_width=True)
