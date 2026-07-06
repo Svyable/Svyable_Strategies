@@ -1,12 +1,14 @@
 # Alpha-family governance guide
 
-Svyable now has three new alpha-family books:
+Svyable now has five new alpha-family books:
 
 1. `svyable_tape_acceleration` for short-to-medium horizon tape bursts.
 2. `svyable_alpha_catalyst` for residual acceleration, absorption, and volatility-transition catalysts.
 3. `svyable_leadership_quality` for slower, more durable residual leadership and quiet accumulation.
+4. `svyable_downside_resilience` for defensive residual alpha during weak or turbulent markets.
+5. `svyable_rotation_breadth` for early cross-sectional leadership rotation and breadth participation.
 
-The purpose of alpha-family governance is to keep those books visible without treating early research factors as proven. The governance layer is read-only and does not create targets, write decisions, or touch operations.
+The purpose of alpha-family governance is to keep those books visible without treating early research factors as proven. The governance layer is read-only and does not create portfolios, write decisions, or touch operations.
 
 ## What the report answers
 
@@ -56,3 +58,11 @@ It also exposes compact metric rows for review cards.
 ## Review posture
 
 A shadow-heavy strategy is not bad by itself. It means the strategy is still in research/incubation and should be compared by candidate-board utility, turnover, factor health, redundancy, and diagnostics before being trusted with more weight.
+
+The PM should compare the five books by role rather than treating them as interchangeable:
+
+- Tape Acceleration: fast tape bursts.
+- Alpha Catalyst: beta-stripped residual catalyst pressure.
+- Leadership Quality: durable participation and quiet accumulation.
+- Downside Resilience: defensive candidate for difficult regimes.
+- Rotation Breadth: early relative-rank and breadth participation.
