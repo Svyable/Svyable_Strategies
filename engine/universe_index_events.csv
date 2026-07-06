@@ -1,0 +1,4 @@
+# Svyable scheduled constituent-change ledger.
+# Required columns: effective_date,index,action,symbol,source,note
+effective_date,index,action,symbol,source,note
+2026-07-07,NASDAQ100,add,SPCX,https://ir.nasdaq.com/news-releases/news-release-details/space-exploration-technologies-corporation-join-nasdaq-100,Space Exploration Technologies Corporation enters Nasdaq-100 before market open
