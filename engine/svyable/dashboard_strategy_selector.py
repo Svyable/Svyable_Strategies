@@ -10,6 +10,55 @@ from svyable.strategy_selector import SelectionPolicy
 from svyable.strategy_selection_service import StrategySelectionService
 
 
+def render_frontier_coverage(
+    service: StrategySelectionService, *, allow_enable: bool = True
+) -> None:
+    """Show how much of the full strategy registry the current board analyzes.
+
+    A board narrower than the registry is the usual reason only a handful of
+    strategies appear in the analysis charts. Surfacing the gap — and a one-click
+    way to close it — keeps every app surface working against the whole frontier.
+    Shared by the agent-lab Board tab and the PM control surface so both report
+    coverage identically.
+    """
+    try:
+        status = service.frontier_status()
+    except Exception:
+        return
+
+    board_count = status.get("board_candidate_count", 0)
+    expected = status.get("expected_candidate_count", 0)
+    registry_count = status.get("registry_strategy_count", 0)
+    blend_count = status.get("blend_registry_count", 0)
+
+    cols = st.columns(4)
+    cols[0].metric("Board candidates", board_count)
+    cols[1].metric("Enabled frontier", expected, help="Enabled strategies + chimeras + hold_current.")
+    cols[2].metric("Registry strategies", registry_count, help="Every strategy the codebase can evaluate.")
+    cols[3].metric("Chimera blends", blend_count)
+
+    if status.get("is_incomplete_latest_board"):
+        missing = status.get("missing_enabled_strategy_ids", []) + status.get("missing_enabled_blend_ids", [])
+        st.warning(
+            "The latest board analyzes "
+            f"**{board_count} of {expected}** enabled candidates. "
+            + (f"Missing: {', '.join(missing[:12])}{'…' if len(missing) > 12 else ''}. " if missing else "")
+            + "Enable the full registry frontier, then run a fresh evaluation."
+        )
+        if allow_enable and st.button(
+            "Enable full registry frontier",
+            help="Turn on every default strategy and chimera in the selection policy.",
+            key="enable_full_frontier",
+        ):
+            try:
+                path = service.save_full_frontier_policy()
+                st.success(f"Full frontier enabled in policy: {path}. Now run a fresh candidate evaluation.")
+            except Exception as exc:
+                st.error(f"Could not enable full frontier: {exc}")
+    else:
+        st.success(f"Board analyzes all {board_count} enabled candidates across the registry frontier.")
+
+
 def _render_regime_panel(service: StrategySelectionService) -> None:
     st.subheader("Regime — turbulence & absorption")
     regime = service.latest_regime()
@@ -290,6 +339,7 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
             st.error(str(exc))
 
     st.subheader("Candidate evaluation")
+    render_frontier_coverage(service, allow_enable=False)
     run_left, run_middle, run_right = st.columns(3)
     with run_left:
         evaluation_start = st.text_input("Evaluation start", value="2020-01-01")
@@ -304,13 +354,28 @@ def render_strategy_selector(service: StrategySelectionService) -> None:
             "Allow holiday/weekend evaluation",
             value=True,
         )
+    evaluate_full_frontier = st.checkbox(
+        "Evaluate the entire registry frontier (ignore narrow policy)",
+        value=True,
+        help=(
+            "Enables every default strategy and chimera in the policy before "
+            "running, so the board covers the whole Strategy Registry & PM "
+            "Selector — not just a stale enabled subset."
+        ),
+    )
     if st.button("Run fresh candidate evaluation"):
         try:
-            with st.spinner("Computing all enabled strategy candidates..."):
+            spinner_text = (
+                "Computing the full registry frontier of candidates..."
+                if evaluate_full_frontier
+                else "Computing all enabled strategy candidates..."
+            )
+            with st.spinner(spinner_text):
                 result = service.run_evaluation(
                     start=evaluation_start,
                     provider=evaluation_provider,
                     force=force_evaluation,
+                    full_frontier=evaluate_full_frontier,
                 )
             st.session_state["strategy_evaluation_result"] = result
             st.success("Candidate evaluation completed. Refreshing the page state.")

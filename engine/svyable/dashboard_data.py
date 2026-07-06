@@ -94,3 +94,44 @@ def load_candidate_weights(
         if not series.empty:
             books[str(row.get("candidate_id", ""))] = series
     return books
+
+
+def board_row_for_candidate(
+    board: pd.DataFrame, candidate_id: str
+) -> pd.Series | None:
+    """Return the board row for ``candidate_id`` (``None`` when absent)."""
+    if board is None or board.empty or "candidate_id" not in board.columns:
+        return None
+    matches = board[board["candidate_id"].astype(str) == str(candidate_id)]
+    return matches.iloc[0] if not matches.empty else None
+
+
+def load_candidate_timeseries(
+    output_root: str | Path,
+    board: pd.DataFrame,
+    candidate_id: str,
+    filename: str,
+    *,
+    numeric: bool = False,
+) -> pd.DataFrame:
+    """Load one datetime-indexed temporal artifact for a single board candidate.
+
+    Resolves the candidate's newest run directory (via the board's ``output_dir``
+    pointer, falling back to the ``candidate_<strategy_id>`` glob) and returns the
+    named CSV as a clean, date-sorted frame. This is the shared backbone for
+    every per-candidate temporal view — ``weights_history.csv`` (weight by name
+    over time), ``pnl_diag.csv`` (returns/turnover/exposure), ``sleeve_weights``,
+    ``ic_health``, and ``regime`` — so no view re-implements artifact resolution.
+    Returns an empty frame when the candidate or file is missing.
+    """
+    row = board_row_for_candidate(board, candidate_id)
+    if row is None:
+        return pd.DataFrame()
+    path = resolve_run_artifact(output_root, row, filename)
+    if path is None:
+        return pd.DataFrame()
+    try:
+        frame = pd.read_csv(path, index_col=0)
+    except (OSError, ValueError, pd.errors.ParserError):
+        return pd.DataFrame()
+    return numeric_timeseries(frame) if numeric else clean_timeseries(frame)

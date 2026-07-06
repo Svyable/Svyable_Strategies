@@ -92,6 +92,41 @@ def test_frontier_status_detects_narrow_candidate_board():
         assert "narrower than the current policy frontier" in status["explanation"]
 
 
+def test_run_evaluation_full_frontier_widens_policy_before_running(monkeypatch):
+    import subprocess as _subprocess
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        save_policy(
+            root,
+            SelectionPolicy(
+                enabled_strategy_ids=("q23_hybrid_alpha",),
+                enabled_blend_ids=(),
+            ),
+        )
+        service = StrategySelectionService(root)
+
+        captured: dict[str, object] = {}
+
+        class _Completed:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def _fake_run(command, **kwargs):
+            # The policy must already be widened by the time the subprocess runs.
+            captured["policy_at_run"] = tuple(service.policy().enabled_strategy_ids)
+            captured["command"] = command
+            return _Completed()
+
+        monkeypatch.setattr(_subprocess, "run", _fake_run)
+        service.run_evaluation(full_frontier=True)
+
+        assert set(captured["policy_at_run"]) == set(default_strategy_ids())
+        # And the widened policy is persisted, not just in-memory for the run.
+        assert set(service.policy().enabled_strategy_ids) == set(default_strategy_ids())
+
+
 if __name__ == "__main__":
     test_full_frontier_policy_action_enables_defaults()
     test_frontier_status_detects_narrow_candidate_board()

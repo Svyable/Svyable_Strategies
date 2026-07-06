@@ -235,9 +235,15 @@ class StrategySelectionService:
         start: str = "2020-01-01",
         provider: str = "yf",
         force: bool = True,
+        full_frontier: bool = False,
     ) -> dict[str, Any]:
         if provider not in {"yf", "tasty"}:
             raise ValueError("provider must be yf or tasty")
+        if full_frontier:
+            # Guarantee the evaluation spans the entire registered frontier, not a
+            # stale/narrow saved policy — the usual reason only a handful of
+            # strategies reach the board.
+            self.save_full_frontier_policy()
         command = [
             sys.executable,
             "-m",

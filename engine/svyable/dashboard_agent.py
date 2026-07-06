@@ -24,10 +24,11 @@ import pandas as pd
 import streamlit as st
 
 from svyable import dashboard_charts as charts
+from svyable.dashboard_candidate_analysis import render_candidate_analytics
 from svyable.dashboard_compare import render_comparison
 from svyable.dashboard_data import load_candidate_returns, load_candidate_weights
 from svyable.dashboard_stack import render_overlap
-from svyable.dashboard_strategy_selector import render_strategy_selector
+from svyable.dashboard_strategy_selector import render_frontier_coverage, render_strategy_selector
 from svyable.dashboard_stress import render_stress_lab
 from svyable.dashboard_ui import render_figure
 from svyable.strategy_selection_service import StrategySelectionService
@@ -71,47 +72,6 @@ def _render_decision_hero(service: StrategySelectionService, board: pd.DataFrame
         st.caption("No agent rationale recorded yet. Run a candidate evaluation to build a board.")
 
 
-def _render_frontier_coverage(service: StrategySelectionService) -> None:
-    """Show how much of the full strategy registry the current board analyzes.
-
-    A board narrower than the registry is the usual reason only a handful of
-    strategies appear in the analysis charts. Surfacing the gap — and a one-click
-    way to close it — keeps every app surface working against the whole frontier.
-    """
-    try:
-        status = service.frontier_status()
-    except Exception:
-        return
-
-    board_count = status.get("board_candidate_count", 0)
-    expected = status.get("expected_candidate_count", 0)
-    registry_count = status.get("registry_strategy_count", 0)
-    blend_count = status.get("blend_registry_count", 0)
-
-    cols = st.columns(4)
-    cols[0].metric("Board candidates", board_count)
-    cols[1].metric("Enabled frontier", expected, help="Enabled strategies + chimeras + hold_current.")
-    cols[2].metric("Registry strategies", registry_count, help="Every strategy the codebase can evaluate.")
-    cols[3].metric("Chimera blends", blend_count)
-
-    if status.get("is_incomplete_latest_board"):
-        missing = status.get("missing_enabled_strategy_ids", []) + status.get("missing_enabled_blend_ids", [])
-        st.warning(
-            "The latest board analyzes "
-            f"**{board_count} of {expected}** enabled candidates. "
-            + (f"Missing: {', '.join(missing[:12])}{'…' if len(missing) > 12 else ''}. " if missing else "")
-            + "Enable the full registry frontier, then run a fresh evaluation in the control surface."
-        )
-        if st.button("Enable full registry frontier", help="Turn on every default strategy and chimera in the selection policy."):
-            try:
-                path = service.save_full_frontier_policy()
-                st.success(f"Full frontier enabled in policy: {path}. Now run a fresh candidate evaluation in the control surface.")
-            except Exception as exc:
-                st.error(f"Could not enable full frontier: {exc}")
-    else:
-        st.success(f"Board analyzes all {board_count} enabled candidates across the registry frontier.")
-
-
 def render_agent(output_root: str | Path) -> None:
     service = StrategySelectionService(output_root)
     board = service.latest_board()
@@ -147,7 +107,7 @@ def render_agent(output_root: str | Path) -> None:
     held_strategy = service.state().get("selected_strategy_id")
 
     with board_tab:
-        _render_frontier_coverage(service)
+        render_frontier_coverage(service)
         left, right = st.columns(2)
         with left:
             if "utility_bps" in board.columns:
@@ -185,6 +145,9 @@ def render_agent(output_root: str | Path) -> None:
             render_overlap(load_candidate_weights(service.output_root, board))
         else:
             st.caption("No per-candidate return history found yet for the current board.")
+
+        st.divider()
+        render_candidate_analytics(service, board, registry, default_candidate=held_strategy)
 
     with stress_tab:
         if len(curves) >= 2:

@@ -214,6 +214,49 @@ def test_candidate_returns_glob_fallback(tmp_path, returns):
     assert "q23_b" in curves
 
 
+def test_board_row_for_candidate_finds_and_misses():
+    from svyable.dashboard_data import board_row_for_candidate
+
+    board = pd.DataFrame({"candidate_id": ["hold_current", "q23_a"], "utility_bps": [0.0, 5.0]})
+    assert board_row_for_candidate(board, "q23_a")["utility_bps"] == 5.0
+    assert board_row_for_candidate(board, "missing") is None
+    assert board_row_for_candidate(pd.DataFrame(), "q23_a") is None
+
+
+def test_load_candidate_timeseries_reads_weight_history(tmp_path):
+    from svyable.dashboard_data import load_candidate_timeseries
+
+    root = tmp_path / "outputs"
+    run = root / "candidate_q23_a" / "20260101_000000"
+    run.mkdir(parents=True)
+    history = pd.DataFrame(
+        {"AAPL": [0.1, 0.2], "MSFT": ["", 0.3]},
+        index=["2026-01-01", "2026-01-02"],
+    )
+    history.index.name = "Date"
+    history.to_csv(run / "weights_history.csv")
+    board = pd.DataFrame(
+        {
+            "candidate_id": ["q23_a"],
+            "strategy_id": ["q23_a"],
+            "output_dir": ["candidate_q23_a/20260101_000000"],
+        }
+    )
+
+    frame = load_candidate_timeseries(root, board, "q23_a", "weights_history.csv", numeric=True)
+    assert isinstance(frame.index, pd.DatetimeIndex)
+    assert list(frame.columns) == ["AAPL", "MSFT"]
+    assert frame.loc[pd.Timestamp("2026-01-01"), "MSFT"] == 0.0  # blank coerced to zero
+
+
+def test_load_candidate_timeseries_missing_returns_empty(tmp_path):
+    from svyable.dashboard_data import load_candidate_timeseries
+
+    board = pd.DataFrame({"candidate_id": ["q23_a"], "strategy_id": ["q23_a"], "output_dir": [""]})
+    assert load_candidate_timeseries(tmp_path, board, "q23_a", "weights_history.csv").empty
+    assert load_candidate_timeseries(tmp_path, board, "missing", "weights_history.csv").empty
+
+
 def _health(**cols) -> pd.DataFrame:
     frame = pd.DataFrame(cols)
     return frame.set_index("factor")
