@@ -21,6 +21,17 @@ def _residual(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     return residual_returns(panel.ret, panel.market_ret, cfg.beta_win)
 
 
+def _where_dates(frame: pd.DataFrame, mask: pd.Series, other: float = 0.0) -> pd.DataFrame:
+    """Apply a date-indexed boolean mask to every asset column.
+
+    Pandas ``DataFrame.where(series)`` can align a Series against columns unless
+    the axis is explicit. Downside factors use date masks, so force row-axis
+    alignment to avoid silently producing all-NaN frames.
+    """
+    date_mask = mask.reindex(frame.index).fillna(False).astype(bool)
+    return frame.where(date_mask, other=other, axis=0)
+
+
 def _market_down_mask(panel: Panel, window: int = 63) -> pd.Series:
     """Causal weak-market mask with a sparse-stress fallback.
 
@@ -52,7 +63,7 @@ def down_market_residual_strength(panel: Panel, cfg: SvyableConfig) -> pd.DataFr
     window = 63
     min_down_days = max(5, window // 8)
     mask = _market_down_mask(panel, window).reindex(resid.index).fillna(False)
-    down_resid = resid.where(mask, 0.0)
+    down_resid = _where_dates(resid, mask, other=0.0)
     count = mask.astype(float).rolling(window, min_periods=min_down_days).sum()
     strength = down_resid.rolling(window, min_periods=min_down_days).sum().div(
         count.replace(0.0, np.nan),
@@ -68,7 +79,7 @@ def downside_capture_inverse(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     mask = _market_down_mask(panel).reindex(panel.ret.index).fillna(False)
     down_mkt = panel.market_ret.where(mask, 0.0)
     denominator = down_mkt.abs().rolling(84, min_periods=30).sum().replace(0.0, np.nan)
-    own_down = panel.ret.where(mask, 0.0).rolling(84, min_periods=30).sum()
+    own_down = _where_dates(panel.ret, mask, other=0.0).rolling(84, min_periods=30).sum()
     capture = own_down.div(denominator, axis=0)
     return (-capture).clip(-5.0, 5.0)
 
@@ -97,7 +108,7 @@ def drawdown_floor_stability(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
 def liquidity_safety_momentum(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
     """Liquidity support that does not vanish during market weakness."""
     mask = _market_down_mask(panel).reindex(panel.ret.index).fillna(False)
-    down_volume = panel.dollar_volume.where(mask, np.nan).rolling(63, min_periods=10).median()
+    down_volume = _where_dates(panel.dollar_volume, mask, other=np.nan).rolling(63, min_periods=10).median()
     all_volume = panel.dollar_volume.rolling(63, min_periods=30).median()
     stress_liquidity = (down_volume / (all_volume + EPS)).clip(0.0, 3.0)
     current_participation = np.sqrt(rel_dollar_volume(panel, 10, 84))
