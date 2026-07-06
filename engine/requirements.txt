@@ -1,7 +1,7 @@
 # Install from the engine/ directory:
 #   python -m pip install -r requirements.txt
 #
-# This pulls the package plus the full research, GUI, broker-adapter, and test
-# extras declared in pyproject.toml so local smoke/regression checks match the
-# Streamlit + agent PM harness workflow.
--e .[all,dev]
+# Default install matches the offline research, GUI, and agent PM harness used by
+# CI. Live broker connectivity is intentionally opt-in with:
+#   python -m pip install -e .[broker]
+-e .[data,ml,hrp,gui,dev]
