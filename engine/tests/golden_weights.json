@@ -1,6 +1,7 @@
 {
   "hash": "63dabad80f538cc81fff705c",
   "config_hash": "052a518c0c903d14",
+  "golden_id": "base_nasdaq_lo",
   "snapshot_markdown": "golden_weights_human.md",
   "snapshot_csv": "golden_weights.csv",
   "source": {

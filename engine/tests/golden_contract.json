@@ -1,0 +1,22 @@
+{
+  "contract_version": 1,
+  "fixture_overrides": {
+    "min_adv": 0.0,
+    "min_price": 0.0,
+    "ml_enabled": false,
+    "seats_base": 15,
+    "seats_max": 20,
+    "seats_min": 10
+  },
+  "golden_id": "base_nasdaq_lo",
+  "kind": "base_config",
+  "label": "Base Nasdaq LO deterministic fixture",
+  "provider": {
+    "kind": "synthetic",
+    "n_assets": 40,
+    "n_days": 600,
+    "seed": 3
+  },
+  "reason": "Stable ML-off deterministic CI behavior contract. This is the regression gate, not a claim that the strategy is the best live candidate.",
+  "strategy_id": "svyable_nasdaq_lo"
+}
