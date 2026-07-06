@@ -486,6 +486,125 @@ def cmd_dashboard(args) -> int:
     return 0
 
 
+def _mark_of(m: dict) -> float | None:
+    """Best live mark from a per-symbol quote/trade snapshot: quote mid if both
+    sides are present, else last trade."""
+    bid, ask, last = m.get("bid"), m.get("ask"), m.get("last")
+    if bid and ask and bid > 0 and ask > 0:
+        return (bid + ask) / 2.0
+    if last and last > 0:
+        return last
+    return None
+
+
+def cmd_monitor(args) -> int:
+    """Real-time portfolio monitor: live dxLink Quote/Trade/Summary marks for
+    held equity positions, plus (optionally) the tastytrade account streamer for
+    order/balance push. Observe-only — never places or mutates orders."""
+    import threading
+    import time as _t
+
+    from svyable.tastytrade import TastytradeClient
+    from svyable.dxlink import DXLinkFeed
+    from svyable.account_streamer import AccountStreamer
+
+    def _num(x):
+        try:
+            v = float(x)
+            return v if v == v else None      # drop NaN
+        except (TypeError, ValueError):
+            return None
+
+    client = TastytradeClient(env=args.env, allow_production=(args.env == "production"))
+    broker = _tasty_sdk_broker(require_credentials=True)
+
+    positions: dict[str, dict] = {}
+    for row in broker.get_positions_frame():
+        if row.get("instrument_type") != "Equity":
+            continue
+        qty = float(row.get("quantity") or 0.0)
+        if abs(qty) < 1e-9:
+            continue
+        positions[str(row["symbol"]).upper()] = {
+            "qty": qty, "avg": _num(row.get("average_open_price")) or 0.0}
+    symbols = sorted(positions)
+    if not symbols:
+        print("no equity positions to monitor")
+        return 0
+
+    marks: dict[str, dict] = {s: {} for s in symbols}
+    lock = threading.Lock()
+
+    def on_event(ev: dict) -> None:
+        sym = str(ev.get("eventSymbol", "")).upper()
+        if sym not in marks:
+            return
+        etype = ev.get("eventType")
+        with lock:
+            m = marks[sym]
+            if etype == "Quote":
+                m["bid"], m["ask"] = _num(ev.get("bidPrice")), _num(ev.get("askPrice"))
+            elif etype == "Trade":
+                m["last"] = _num(ev.get("price"))
+            elif etype == "Summary":
+                m["prev_close"] = _num(ev.get("prevDayClosePrice"))
+
+    if not args.no_account_stream:
+        def account_loop() -> None:
+            def _on_acct(n: dict) -> None:
+                if n.get("type") == "Order":
+                    o = n.get("data", {})
+                    print(f"[order] #{o.get('id')} {o.get('status')} "
+                          f"{o.get('underlying-symbol', '')}", flush=True)
+            try:
+                AccountStreamer(client, [broker.account_number]).stream(
+                    _on_acct, run_s=args.duration)
+            except Exception as exc:  # noqa: BLE001 — informational side channel
+                print(f"account stream ended: {exc}", file=sys.stderr)
+        threading.Thread(target=account_loop, daemon=True).start()
+
+    subs = [{"type": t, "symbol": s} for s in symbols
+            for t in ("Quote", "Trade", "Summary")]
+    feed = DXLinkFeed(client, token_cache=Path(args.cache).parent
+                      / "data-cache-tasty" / "quote_token.json")
+    threading.Thread(
+        target=lambda: feed.stream(subs, on_event, run_s=args.duration),
+        daemon=True).start()
+
+    print(f"monitoring {len(symbols)} positions for {args.duration:.0f}s "
+          f"(env={args.env}); Ctrl-C to stop\n")
+    t_end = _t.time() + args.duration
+    try:
+        while _t.time() < t_end:
+            _t.sleep(args.interval)
+            total_unreal = total_val = 0.0
+            lines = []
+            with lock:
+                for s in symbols:
+                    mark = _mark_of(marks[s])
+                    pos = positions[s]
+                    if mark is None:
+                        lines.append(f"  {s:<6} {pos['qty']:>8.0f}   (awaiting quote)")
+                        continue
+                    val = mark * pos["qty"]
+                    unreal = (mark - pos["avg"]) * pos["qty"]
+                    prev = marks[s].get("prev_close")
+                    day = f"{(mark - prev) / prev * 100:+.2f}%" if prev else "  n/a"
+                    total_val += val
+                    total_unreal += unreal
+                    lines.append(f"  {s:<6} {pos['qty']:>8.0f} @ {mark:>9.2f}  "
+                                 f"val ${val:>11,.0f}  unreal ${unreal:>9,.0f}  "
+                                 f"day {day:>7}")
+            ts = _t.strftime("%H:%M:%S")
+            print(f"[{ts}] live marks")
+            print("\n".join(lines))
+            print(f"  {'TOTAL':<6} {'':>8}   {'':>9}   val ${total_val:>11,.0f}  "
+                  f"unreal ${total_unreal:>9,.0f}\n", flush=True)
+    except KeyboardInterrupt:
+        print("\nstopped")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="svyable")
     p.add_argument("--env", choices=["sandbox", "production"],
@@ -554,6 +673,14 @@ def main(argv=None) -> int:
     sub.add_parser("session")
     sub.add_parser("dashboard")
 
+    mon = sub.add_parser("monitor", help="real-time position marks + account push (observe-only)")
+    mon.add_argument("--duration", type=float, default=300.0,
+                     help="seconds to run the monitor (default 300)")
+    mon.add_argument("--interval", type=float, default=5.0,
+                     help="seconds between P&L refreshes (default 5)")
+    mon.add_argument("--no-account-stream", action="store_true",
+                     help="live marks only; skip the order/balance account streamer")
+
     au = sub.add_parser("auth", help="one-time Tastytrade OAuth onboarding -> .env")
     au.add_argument("--env-file", default=None, help="path to .env (default engine/.env)")
     au.add_argument("--scope", default="read",
@@ -568,7 +695,8 @@ def main(argv=None) -> int:
             "factors": cmd_factors, "walkforward": cmd_walkforward,
             "rebalance": cmd_rebalance, "smoke": cmd_smoke, "health": cmd_health,
             "universe": cmd_universe, "tasty": cmd_tasty, "auth": cmd_auth,
-            "session": cmd_session, "dashboard": cmd_dashboard}[args.cmd](args)
+            "session": cmd_session, "dashboard": cmd_dashboard,
+            "monitor": cmd_monitor}[args.cmd](args)
 
 
 if __name__ == "__main__":
