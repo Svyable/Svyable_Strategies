@@ -1,4 +1,16 @@
 {
-  "hash": "cc4fac4fcdebaaff41e43808",
-  "config_hash": "052a518c0c903d14"
+  "hash": "63dabad80f538cc81fff705c",
+  "config_hash": "052a518c0c903d14",
+  "snapshot_markdown": "golden_weights_human.md",
+  "snapshot_csv": "golden_weights.csv",
+  "source": {
+    "provider": "SyntheticProvider",
+    "n_assets": 40,
+    "n_days": 600,
+    "seed": 3,
+    "ml_enabled": false,
+    "seats_base": 15,
+    "seats_min": 10,
+    "seats_max": 20
+  }
 }
