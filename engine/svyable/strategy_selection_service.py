@@ -310,6 +310,126 @@ class StrategySelectionService:
             return {}
         return json.loads((directory / "selection.json").read_text())
 
+    def _read_selection_json(self, filename: str) -> dict[str, Any]:
+        path = self.selection_root / filename
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return {"status": "BLOCK", "blockers": [f"malformed json: {path}"]}
+        return payload if isinstance(payload, dict) else {}
+
+    def latest_agent_context(self) -> dict[str, Any]:
+        return self._read_selection_json("latest_agent_context.json")
+
+    def latest_agent_memo(self) -> str:
+        path = self.selection_root / "latest_agent_pm_memo.md"
+        return path.read_text() if path.exists() else ""
+
+    def latest_agent_guard_report(self) -> dict[str, Any]:
+        return self._read_selection_json("latest_agent_decision_guard.json")
+
+    def latest_agent_review_receipt(self) -> dict[str, Any]:
+        return self._read_selection_json("latest_agent_review_receipt.json")
+
+    def latest_agent_review_audit(self) -> dict[str, Any]:
+        return self._read_selection_json("latest_agent_review_audit.json")
+
+    def latest_agent_review_chain(self) -> dict[str, Any]:
+        return self._read_selection_json("latest_agent_review_chain.json")
+
+    def write_guarded_decision(
+        self,
+        *,
+        candidate_id: str,
+        reason: str,
+        confidence: float,
+        operator: str = "human_pm",
+    ) -> dict[str, Any]:
+        """Write a hash-matched decision using the latest agent context.
+
+        This is the Streamlit-safe path. The writer fills ``as_of`` and
+        ``candidate_set_hash`` from ``latest_agent_context.json`` and immediately
+        runs the decision guard. It does not activate portfolios or create orders.
+        """
+        from svyable.agent_decision_writer import write_agent_decision_from_context
+
+        return write_agent_decision_from_context(
+            self.output_root,
+            candidate_id=candidate_id,
+            confidence=float(confidence),
+            reason=reason,
+            operator=operator,
+        )
+
+    def run_review_chain(self, *, refresh_context: bool = False) -> dict[str, Any]:
+        """Run the non-trading guard/receipt/audit chain for the latest decision."""
+        from svyable.agent_review_chain import run_review_chain
+
+        return run_review_chain(self.output_root, refresh_context=refresh_context)
+
+    def activation_readiness(self) -> dict[str, Any]:
+        """Explain whether Streamlit may expose the activation action."""
+        board_dir = self.latest_board_dir()
+        if board_dir is None:
+            return {
+                "status": "BLOCK",
+                "next_action": "Run today's strategy evaluation",
+                "blockers": ["No candidate board exists."],
+                "activated": False,
+            }
+        if (board_dir / "activation.json").exists():
+            return {
+                "status": "PASS",
+                "next_action": "Already activated",
+                "blockers": [],
+                "activated": True,
+            }
+
+        board = self.latest_board()
+        if board.empty:
+            return {
+                "status": "BLOCK",
+                "next_action": "Run today's strategy evaluation",
+                "blockers": ["Latest candidate board is empty."],
+                "activated": False,
+            }
+        board_hash = str(board.iloc[0].get("candidate_set_hash", ""))
+        board_as_of = str(board.iloc[0].get("as_of", ""))
+        blockers: list[str] = []
+
+        decision = self.pending_agent_decision()
+        if not decision:
+            blockers.append("No hash-matched agent/PM decision exists for the latest board.")
+        elif not decision.get("eligible"):
+            blockers.append("The selected candidate is no longer eligible on the latest board.")
+
+        chain = self.latest_agent_review_chain()
+        receipt = self.latest_agent_review_receipt()
+        audit = self.latest_agent_review_audit()
+        if chain.get("status") != "PASS":
+            blockers.append("Review chain has not passed for the latest decision.")
+        if receipt.get("status") != "PASS":
+            blockers.append("Review receipt is missing or not PASS.")
+        if audit.get("status") != "PASS":
+            blockers.append("Review audit is missing or not PASS.")
+        if receipt and str(receipt.get("candidate_set_hash", "")) != board_hash:
+            blockers.append("Review receipt hash does not match the latest board.")
+        if receipt and str(receipt.get("as_of", "")) != board_as_of:
+            blockers.append("Review receipt date does not match the latest board.")
+
+        return {
+            "status": "PASS" if not blockers else "BLOCK",
+            "next_action": "Approve today's strategy" if not blockers else "Resolve review blockers",
+            "blockers": blockers,
+            "activated": False,
+            "candidate_id": decision.get("candidate_id"),
+            "candidate_set_hash": board_hash,
+            "as_of": board_as_of,
+            "decision_fingerprint": receipt.get("decision_fingerprint"),
+        }
+
     def save_agent_decision(
         self,
         *,
@@ -317,25 +437,19 @@ class StrategySelectionService:
         reason: str,
         confidence: float,
     ) -> Path:
-        board = self.latest_board()
-        if board.empty:
-            raise FileNotFoundError("No candidate board exists. Run the daily PM job first.")
-        matches = board[board["candidate_id"] == candidate_id]
-        if matches.empty:
-            raise ValueError(f"Candidate {candidate_id!r} is not on the latest board.")
-        if not bool(matches.iloc[0]["eligible"]):
-            raise ValueError(f"Candidate {candidate_id!r} is not eligible.")
-        payload = {
-            "as_of": str(matches.iloc[0]["as_of"]),
-            "candidate_set_hash": str(matches.iloc[0]["candidate_set_hash"]),
-            "candidate_id": candidate_id,
-            "confidence": max(0.0, min(1.0, float(confidence))),
-            "reason": str(reason).strip()[:1000],
-        }
-        path = agent_decision_path(self.output_root)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True))
-        return path
+        """Compatibility wrapper for older Streamlit code.
+
+        New callers should use :meth:`write_guarded_decision` so they can display
+        the guard result. This method still returns the decision path expected by
+        existing callers, but it now uses the guarded writer instead of hand-built
+        JSON.
+        """
+        self.write_guarded_decision(
+            candidate_id=candidate_id,
+            reason=reason,
+            confidence=confidence,
+        )
+        return agent_decision_path(self.output_root)
 
     def activate_latest(self) -> dict[str, Any]:
         return activate_latest_selection(self.output_root)
@@ -348,33 +462,37 @@ class StrategySelectionService:
 
 Read:
 - {board_dir / 'candidate_board.csv'}
+- {board_dir / 'agent_pm_memo.md'}
+- {board_dir / 'agent_context.json'}
 - {board_dir / 'selection.json'}
 - {self.output_root / 'ledger.db'}
 
-Choose exactly one eligible `candidate_id`. The board contains single
-registered strategies AND chimera blends (`chimera_*` rows; the `components`
-column holds the exact composition). Consider expected alpha, estimated cost,
-one-way turnover, current overlap, cadence, volatility, drawdown, the regime
-throttle, and the cost-aware utility. A chimera earns its seat through
-diversification and trade netting — pick one over a single strategy when the
-blended book beats every component after costs. Prefer `hold_current` when no
-candidate has a robust edge. Never edit weights or strategy code during this
-review; your decision is a proposal that a human approves at activation.
+Choose exactly one allowed `candidate_id`. The board contains single registered
+strategies AND chimera blends (`chimera_*` rows; the `components` column holds
+the exact composition). Consider expected alpha, estimated cost, one-way
+turnover, current overlap, cadence, volatility, drawdown, visible regime state,
+artifact health, and cost-aware utility. Prefer `hold_current` when no candidate
+has a robust edge. Never edit weights or strategy code during this review; your
+decision is a proposal that a human approves after the review chain passes.
 
-Write JSON to:
-{agent_decision_path(self.output_root)}
+Preferred UI path:
+1. Use Agent Lab → Control surface → Today's strategy decision.
+2. Write the guarded decision.
+3. Run the review chain.
+4. Activate only after PASS and human approval.
 
-Required schema:
+Required schema if writing manually:
 {{
   "as_of": "<candidate board as_of>",
   "candidate_set_hash": "<candidate board hash>",
-  "candidate_id": "<eligible candidate_id>",
+  "candidate_id": "<allowed candidate_id>",
   "confidence": 0.0,
   "reason": "<concise PM rationale>"
 }}
 
 Then run:
-python -m svyable.strategy_activate
+svyable-agent-review-chain --out {self.output_root}
+svyable-strategy-activate --out {self.output_root}
 
 Activation re-validates the date, board hash, eligibility, and registered
 strategy before writing the canonical Tastytrade weights.
@@ -391,6 +509,12 @@ strategy before writing the canonical Tastytrade weights.
             "decision": self.latest_decision(),
             "pending_agent_decision": self.pending_agent_decision(),
             "frontier_status": self.frontier_status(),
+            "agent_context": self.latest_agent_context(),
+            "agent_guard_report": self.latest_agent_guard_report(),
+            "agent_review_chain": self.latest_agent_review_chain(),
+            "agent_review_receipt": self.latest_agent_review_receipt(),
+            "agent_review_audit": self.latest_agent_review_audit(),
+            "activation_readiness": self.activation_readiness(),
             "policy_path": str(policy_path(self.output_root)),
             "agent_decision_path": str(agent_decision_path(self.output_root)),
         }

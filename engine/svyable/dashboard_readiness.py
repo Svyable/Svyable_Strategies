@@ -1,8 +1,9 @@
 """Agent and human readiness checks for the PM command center.
 
-This is the operational checklist agents and humans need before trusting a live
+This is the operational checklist agents and humans need before trusting a
 portfolio action. It intentionally combines local research state, strategy-policy
-coverage, daily execution artifacts, broker session state, and live quote health.
+coverage, the agent review chain, daily execution artifacts, broker session
+state, and live quote health.
 """
 
 from __future__ import annotations
@@ -61,6 +62,35 @@ def _quote_gate(market_frame: pd.DataFrame | None) -> dict[str, str]:
     if wide:
         return _gate("Live quotes", _WARN, f"{wide} symbols have spreads > 25 bps", "broker")
     return _gate("Live quotes", _PASS, f"{len(market_frame)} symbols quoted; spreads acceptable", "broker")
+
+
+def _agent_review_gate(strategy_service: StrategySelectionService) -> dict[str, str]:
+    readiness = strategy_service.activation_readiness()
+    if readiness.get("activated"):
+        return _gate("Agent review", _PASS, "latest board already activated", "PM selector")
+    if readiness.get("status") == _PASS:
+        candidate = readiness.get("candidate_id") or "selected candidate"
+        return _gate(
+            "Agent review",
+            _PASS,
+            f"review chain passed for {candidate}; activation is available",
+            "PM selector",
+        )
+
+    blockers = readiness.get("blockers", []) or []
+    if not strategy_service.pending_agent_decision():
+        return _gate(
+            "Agent review",
+            _WARN,
+            "no PM decision yet; choose today’s strategy in Agent Lab",
+            "PM selector",
+        )
+    return _gate(
+        "Agent review",
+        _BLOCK,
+        "; ".join(str(item) for item in blockers[:2]) or "review chain is not PASS",
+        "PM selector",
+    )
 
 
 def _ledger_health(service: DashboardService, ledger_snapshot: dict[str, Any] | None) -> dict[str, Any]:
@@ -131,6 +161,7 @@ def build_readiness_snapshot(
             )
         )
 
+    gates.append(_agent_review_gate(strategy_service))
     gates.append(_quote_gate(market_frame))
 
     health = _ledger_health(service, ledger_snapshot)
