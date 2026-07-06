@@ -1,0 +1,6 @@
+Plotly is declared in pyproject.toml under the gui extra.
+
+The full requirements.lock replacement was not pushed from the connector session because
+large lockfile rewrites can trip safety filtering. Regenerate the lockfile locally or in CI
+with the project-standard uv workflow after dependency resolution confirms plotly==6.4.0
+(or the current resolver-compatible Plotly release).
