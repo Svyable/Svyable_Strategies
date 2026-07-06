@@ -18,8 +18,6 @@ concurrency:
 permissions:
   contents: read
 
-
-
 env:
   PYTHONHASHSEED: "0"
   OMP_NUM_THREADS: "1"
@@ -83,7 +81,9 @@ jobs:
         run: python tests/test_risk_controls.py
 
       - name: Factor library regression
-        run: python tests/test_factor_library_enhancements.py
+        run: |
+          python tests/test_factor_library_enhancements.py
+          python tests/test_factor_catalog_smoke.py
 
       - name: Strategy blend regression
         run: python tests/test_strategy_blend.py
