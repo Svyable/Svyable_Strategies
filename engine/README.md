@@ -21,6 +21,7 @@ svyable/
   strategy_activation.py       validated one-time canonical activation
   strategy_daily.py            scheduled candidate evaluation runner
   strategy_activate.py         activation CLI for agent mode
+  universe.py                  PIT snapshots plus scheduled index-change ledger
   pipeline.py                  reusable per-strategy orchestration
   tastytrade_sdk.py            typed Tastytrade broker adapter
   execution_control.py         ADV-aware planning, polling, reconciliation
@@ -68,6 +69,33 @@ python -m svyable.strategy_daily --start 2020-01-01 --evaluate-only
 
 The scheduled wrapper is `../ops/run_daily.sh`.
 
+## Universe and index-change workflow
+
+The run wrapper materializes `outputs/universe/effective_universe.txt` from two
+reviewable inputs before strategy evaluation:
+
+```bash
+python -m svyable.universe \
+  --seed universe_nasdaq_seed.txt \
+  --events universe_index_events.csv \
+  --out outputs/universe/effective_universe.txt \
+  --as-of "$(date +%F)"
+```
+
+Use `universe_index_events.csv` for announced constituent changes. Each row is a
+small immutable fact: `effective_date,index,action,symbol,source,note`. Future
+rows stay pending until their effective date, so agents can stage changes early
+without leaking future membership into today's run.
+
+Environment overrides used by `ops/run_daily.sh`:
+
+```bash
+SVYABLE_UNIVERSE_SEED=universe_nasdaq_seed.txt
+SVYABLE_INDEX_EVENTS=universe_index_events.csv
+SVYABLE_UNIVERSE_AS_OF=2026-07-07
+SVYABLE_EFFECTIVE_UNIVERSE=outputs/universe/effective_universe.txt
+```
+
 ## Research and validation
 
 ```bash
@@ -75,6 +103,7 @@ python -m svyable.cli --start 2020-01-01 backtest --trials 20
 python -m svyable.cli --start 2020-01-01 factors
 python -m svyable.cli --start 2020-01-01 walkforward
 python -m svyable.cli --out /tmp/svyable-smoke smoke
+pytest engine/tests/test_universe_index_changes.py
 ```
 
 ## Operations console
@@ -93,11 +122,13 @@ The selector GUI manages registered strategies and policy, can run a fresh candi
 - Minimum-hold, cadence, turnover, expected-alpha, cost, risk, and kill-switch gates apply before selection.
 - Agent decisions require the exact board date and hash.
 - A board activates once; a later different decision is rejected.
+- Index changes are data, not code: stage them in the event ledger and let the materializer apply them as-of the effective date.
 - Production bulk submission remains disabled.
 
 ## Honesty ledger
 
 - Seed-universe historical backtests may be survivorship-biased.
+- Scheduled index events provide forward operational correctness, not purchased deep-history index membership.
 - Expected alpha is a causal candidate-comparison estimate, not a forecast guarantee.
 - Daily-bar flow factors are proxies, not true order-book measurements.
 - A registered strategy becomes operationally trusted only after walk-forward evidence and a sustained sandbox record.

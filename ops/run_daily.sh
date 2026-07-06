@@ -2,6 +2,7 @@
 # Svyable daily PM selector/context-pack run.
 #
 # Scope:
+#   - materialize the effective model universe from seed + index-change ledger;
 #   - refresh market data;
 #   - evaluate registered strategies/chimeras;
 #   - write immutable candidate board + agent context pack;
@@ -37,6 +38,10 @@ STRICT_DAILY="${SVYABLE_STRICT_DAILY:-true}"
 RUN_HEALTH="${SVYABLE_RUN_HEALTH_AFTER_DAILY:-true}"
 PYTHON_BIN="${SVYABLE_PYTHON:-$ENGINE_DIR/.venv/bin/python}"
 LOG_DIR="${SVYABLE_LOG_DIR:-$ENGINE_DIR/logs}"
+UNIVERSE_SEED="${SVYABLE_UNIVERSE_SEED:-universe_nasdaq_seed.txt}"
+INDEX_EVENTS="${SVYABLE_INDEX_EVENTS:-universe_index_events.csv}"
+UNIVERSE_AS_OF="${SVYABLE_UNIVERSE_AS_OF:-$(date +%F)}"
+EFFECTIVE_UNIVERSE="${SVYABLE_EFFECTIVE_UNIVERSE:-$OUT_ROOT/universe/effective_universe.txt}"
 
 mkdir -p "$LOG_DIR"
 STAMP="$(date +%Y%m%d_%H%M%S)"
@@ -78,12 +83,28 @@ echo "engine=$ENGINE_DIR env=$ENVIRONMENT provider=$PROVIDER out=$OUT_ROOT start
 
 ping_hc "/start"
 
+if [[ -f "$INDEX_EVENTS" ]]; then
+  echo "=== materialize effective universe as_of=$UNIVERSE_AS_OF ===" | tee -a "$LOG"
+  materialize_cmd=(
+    "$PYTHON_BIN" -m svyable.universe
+    --seed "$UNIVERSE_SEED"
+    --events "$INDEX_EVENTS"
+    --out "$EFFECTIVE_UNIVERSE"
+    --as-of "$UNIVERSE_AS_OF"
+  )
+  "${materialize_cmd[@]}" 2>&1 | tee -a "$LOG"
+else
+  EFFECTIVE_UNIVERSE="$UNIVERSE_SEED"
+  echo "index event ledger missing; using seed universe: $UNIVERSE_SEED" | tee -a "$LOG"
+fi
+
 daily_cmd=(
   "$PYTHON_BIN" -m svyable.strategy_daily
   --env "$ENVIRONMENT"
   --provider "$PROVIDER"
   --start "$START_DATE"
   --out "$OUT_ROOT"
+  --universe "$EFFECTIVE_UNIVERSE"
 )
 
 if _truthy "$STRICT_DAILY"; then
