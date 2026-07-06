@@ -76,7 +76,7 @@ def down_market_residual_strength(panel: Panel, cfg: SvyableConfig) -> pd.DataFr
     strength = conditional_strength.where(enough_weak_samples, unconditional_strength, axis=0)
     resid_vol = resid.rolling(window, min_periods=min_resid_days).std()
     effective_count = count.where(enough_weak_samples, float(window)).clip(lower=1.0)
-    signal = strength.div(resid_vol + EPS, axis=0) * np.sqrt(effective_count)
+    signal = strength.div(resid_vol + EPS, axis=0).mul(np.sqrt(effective_count), axis=0)
     return signal.clip(-6.0, 6.0)
 
 
