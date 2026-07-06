@@ -40,6 +40,11 @@ _TASTY_ENV_NAMES = (
 
 @pytest.fixture(autouse=True)
 def clean_tasty_env(monkeypatch):
+    # ``TastySettings.from_env`` calls ``load_dotenv``, which would otherwise
+    # re-inject a developer's local ``engine/.env`` (e.g. production credentials)
+    # right after we clear the process environment — defeating the point of these
+    # hermetic boundary tests. Neutralize it so the tests assert on the env we set.
+    monkeypatch.setattr("svyable.broker_settings.load_dotenv", lambda *args, **kwargs: False)
     for name in _TASTY_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
 
