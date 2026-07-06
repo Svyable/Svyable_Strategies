@@ -377,13 +377,14 @@ def factor_ic_scatter(frame: pd.DataFrame, *, title: str = "Factor IC reliabilit
         raise ValueError("factor health frame is missing ic_ir or coverage")
     if "weight" not in data.columns:
         data["weight"] = 1.0
+    data["marker_size"] = data["weight"].abs().fillna(0.0).clip(lower=0.01)
     hover = [column for column in ["factor", "stage", "pm_state", "mean_ic", "hit_rate", "observations", "weight"] if column in data.columns]
     fig = px.scatter(
         data,
         x="coverage",
         y="ic_ir",
         color="pm_state" if "pm_state" in data.columns else "stage" if "stage" in data.columns else None,
-        size=data["weight"].abs().fillna(0.0).clip(lower=0.01),
+        size="marker_size",
         text="factor" if "factor" in data.columns else None,
         hover_data=hover,
         title=title,
