@@ -1,5 +1,8 @@
-"""DXLink websocket client — historical daily candles + streaming quotes from
-tastytrade's market-data backbone (one vendor for broker AND data).
+"""DXLink websocket client for tastytrade market data.
+
+This module handles historical daily candles and streaming quote-token access
+from tastytrade's market-data backbone. It is data-only; order management lives
+in ``svyable.tastytrade_sdk.TastySdkBroker``.
 
 Protocol order (per tastytrade docs): SETUP -> wait AUTH_STATE:UNAUTHORIZED ->
 AUTH(api-quote-token) -> wait AUTHORIZED -> CHANNEL_REQUEST(FEED) -> FEED_SETUP
