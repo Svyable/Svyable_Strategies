@@ -121,6 +121,18 @@ def _write_agent_context_pack(args, selection, ledger: Ledger) -> dict[str, str]
         return None
 
 
+def _write_playbooks(selection, ledger: Ledger) -> dict | None:
+    try:
+        from svyable.strategy_playbook import write_playbook_bundle
+
+        return write_playbook_bundle(selection.board, selection.board_dir)
+    except Exception as exc:
+        message = f"strategy playbook generation failed: {exc}"
+        print(f"WARNING: {message}", file=sys.stderr)
+        ledger.record_event("warning", "strategy_playbook", message)
+        return None
+
+
 def run(args) -> int:
     ledger = Ledger(Path(args.out) / "ledger.db")
     try:
@@ -186,6 +198,7 @@ def run(args) -> int:
             current_weights_override=starting_weights,
             current_position_source=position_source,
         )
+        playbooks = _write_playbooks(selection, ledger)
         candidate_hash = str(selection.board.iloc[0]["candidate_set_hash"])
         _write_position_snapshot(
             args.out,
@@ -239,6 +252,7 @@ def run(args) -> int:
                 "provider": panel.meta.get("provider"),
                 "adjustment": panel.meta.get("adjustment"),
                 "agent_context_pack": agent_pack,
+                "playbooks": playbooks,
             },
             output_dir=str(canonical_output or selection.board_dir),
         )
@@ -254,14 +268,15 @@ def run(args) -> int:
             "one_way_turnover": decision.get("one_way_turnover"),
             "estimated_cost_bps": decision.get("estimated_cost_bps"),
             "candidate_board": str(selection.board_dir / "candidate_board.csv"),
+            "playbook_index": playbooks.get("index_path") if playbooks else None,
             "canonical_output": canonical_output,
         }
         if agent_pack:
             output.update(agent_pack)
         if policy.mode == "agent":
             output["next_step"] = (
-                "Review agent_pm_memo.md, write strategy_selection/agent_decision.json "
-                "using only an allowed candidate_id, then run `python -m svyable.strategy_activate`."
+                "Review the Streamlit Playbook / agent PM memo, write a guarded decision "
+                "using only an allowed candidate_id, then activate after review checks pass."
             )
         print(json.dumps(output, indent=2, default=str))
 
