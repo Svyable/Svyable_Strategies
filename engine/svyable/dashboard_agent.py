@@ -6,12 +6,10 @@ This is the "new and improved" surface for Svyable's agentic setup. It composes:
    cost-aware edge over simply holding — read from the strategy-selection state.
 2. Board visualizations — per-candidate utility / net-alpha rankings and an
    alpha-vs-turnover scatter, so the trade-off the agent optimizes is legible.
-3. A PM decision scorecard — GREENLIGHT / REVIEW / HOLD / BLOCK language that
-   compresses edge, turnover, overlap, drawdown, volatility, cost, and eligibility.
-4. A daily playbook — PM one-pager style cards for every candidate strategy.
-5. A cross-candidate equity overlay — every eligible recipe's shadow NAV on one
+3. A daily playbook — PM one-pager style cards for every candidate strategy.
+4. A cross-candidate equity overlay — every eligible recipe's shadow NAV on one
    axis, the currently-held strategy highlighted.
-6. A Q23-style stress and what-if lab — red-market survival, drawdown recovery,
+5. A Q23-style stress and what-if lab — red-market survival, drawdown recovery,
    monthly candidate heatmaps, and research-only blend experiments.
 
 Then it delegates to the existing :func:`render_strategy_selector` control
@@ -27,7 +25,6 @@ import pandas as pd
 import streamlit as st
 
 from svyable import dashboard_charts as charts
-from svyable import dashboard_interactive as interactive
 from svyable.dashboard_candidate_analysis import render_candidate_analytics
 from svyable.dashboard_compare import render_comparison
 from svyable.dashboard_data import load_candidate_returns, load_candidate_weights
@@ -35,13 +32,7 @@ from svyable.dashboard_playbook import render_strategy_playbook
 from svyable.dashboard_stack import render_overlap
 from svyable.dashboard_strategy_selector import render_frontier_coverage, render_strategy_selector
 from svyable.dashboard_stress import render_stress_lab
-from svyable.dashboard_ui import render_figure, render_plotly
-from svyable.strategy_decision_scorecard import (
-    best_play,
-    build_decision_scorecard,
-    decision_reason,
-    render_decision_ticket,
-)
+from svyable.dashboard_ui import render_figure
 from svyable.strategy_selection_service import StrategySelectionService
 
 
@@ -83,28 +74,52 @@ def _render_decision_hero(service: StrategySelectionService, board: pd.DataFrame
         st.caption("No agent rationale recorded yet. Run a candidate evaluation to build a board.")
 
 
+def _plotly_available() -> bool:
+    try:
+        from svyable import dashboard_interactive as interactive
+    except Exception:
+        return False
+    return bool(interactive.available())
+
+
 def _render_candidate_ranking(board: pd.DataFrame, value_col: str, title: str) -> None:
-    if interactive.available():
+    if _plotly_available():
+        from svyable import dashboard_interactive as interactive
+        from svyable.dashboard_ui import render_plotly
+
         render_plotly(interactive.candidate_ranking(board, value_col, title=title))
     else:
         render_figure(charts.candidate_ranking_chart(board, value_col, title=title))
 
 
 def _render_alpha_cost_map(board: pd.DataFrame, held_strategy: str | None) -> None:
-    if interactive.available():
+    if _plotly_available():
+        from svyable import dashboard_interactive as interactive
+        from svyable.dashboard_ui import render_plotly
+
         render_plotly(interactive.alpha_cost_map(board, highlight=held_strategy))
     else:
         render_figure(charts.alpha_vs_cost_scatter(board, highlight=held_strategy))
 
 
 def _render_equity_overlay(curves: dict[str, pd.Series], held_strategy: str | None) -> None:
-    if interactive.available():
+    if _plotly_available():
+        from svyable import dashboard_interactive as interactive
+        from svyable.dashboard_ui import render_plotly
+
         render_plotly(interactive.multi_equity(curves, highlight=held_strategy))
     else:
         render_figure(charts.multi_equity_chart(curves, highlight=held_strategy))
 
 
 def _render_pm_scorecard(board: pd.DataFrame) -> pd.DataFrame:
+    from svyable.strategy_decision_scorecard import (
+        best_play,
+        build_decision_scorecard,
+        decision_reason,
+        render_decision_ticket,
+    )
+
     scorecard = build_decision_scorecard(board)
     if scorecard.empty:
         st.info("No candidate scorecard available yet.")
@@ -165,7 +180,10 @@ def _render_pm_scorecard(board: pd.DataFrame) -> pd.DataFrame:
         use_container_width=True,
         hide_index=True,
     )
-    if interactive.available():
+    if _plotly_available():
+        from svyable import dashboard_interactive as interactive
+        from svyable.dashboard_ui import render_plotly
+
         render_plotly(interactive.decision_scorecard_map(scorecard))
     return scorecard
 
@@ -192,13 +210,7 @@ def render_agent(output_root: str | Path) -> None:
     _render_decision_hero(service, board)
 
     board_tab, playbook_tab, compare_tab, stress_tab, control_tab = st.tabs(
-        [
-            "🎯 Board",
-            "📖 Playbook",
-            "⚖️ Compare strategies",
-            "🧪 Stress / what-if lab",
-            "🛠️ Control surface",
-        ]
+        ["🎯 Board", "📖 Playbook", "⚖️ Compare strategies", "🧪 Stress / what-if lab", "🛠️ Control surface"]
     )
 
     curves = load_candidate_returns(service.output_root, board)
