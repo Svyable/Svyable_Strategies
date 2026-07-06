@@ -1,4 +1,4 @@
-"""View models for alpha-catalyst GUI surfaces.
+"""View models for alpha-family GUI surfaces.
 
 These helpers keep the Factor Governance Streamlit screen focused on rendering
 while making the new alpha-factor and strategy summary testable.
@@ -11,16 +11,26 @@ from typing import Any
 import pandas as pd
 
 from svyable.strategy_alpha_catalyst import ALPHA_CATALYST
+from svyable.strategy_downside_resilience import DOWNSIDE_RESILIENCE
 from svyable.strategy_leadership_quality import LEADERSHIP_QUALITY
 from svyable.strategy_registry import get_strategy
+from svyable.strategy_rotation_breadth import ROTATION_BREADTH
 from svyable.strategy_tape_acceleration import TAPE_ACCELERATION
 
 
-ALPHA_STRATEGY_IDS = ("svyable_alpha_catalyst", "svyable_tape_acceleration", "svyable_leadership_quality")
+ALPHA_STRATEGY_IDS = (
+    "svyable_alpha_catalyst",
+    "svyable_tape_acceleration",
+    "svyable_leadership_quality",
+    "svyable_downside_resilience",
+    "svyable_rotation_breadth",
+)
 ALPHA_FAMILIES = {
     **{name: "Alpha Catalyst" for name in ALPHA_CATALYST},
     **{name: "Tape Acceleration" for name in TAPE_ACCELERATION},
     **{name: "Leadership Quality" for name in LEADERSHIP_QUALITY},
+    **{name: "Downside Resilience" for name in DOWNSIDE_RESILIENCE},
+    **{name: "Rotation Breadth" for name in ROTATION_BREADTH},
 }
 
 
@@ -61,6 +71,7 @@ def alpha_strategy_cards(catalog: pd.DataFrame) -> pd.DataFrame:
         alpha_family_count = sum(1 for factor in factors if factor in ALPHA_FAMILIES)
         proven = sum(1 for factor in factors if stage_lookup.get(factor) == "proven")
         shadow = sum(1 for factor in factors if stage_lookup.get(factor) == "shadow")
+        cfg = spec.build_config()
         rows.append({
             "strategy_id": spec.strategy_id,
             "name": spec.display_name,
@@ -71,9 +82,9 @@ def alpha_strategy_cards(catalog: pd.DataFrame) -> pd.DataFrame:
             "proven_factors": proven,
             "shadow_factors": shadow,
             "shadow_ratio": round(shadow / len(factors), 3) if factors else 0.0,
-            "target_vol": spec.build_config().target_vol,
-            "max_pos": spec.build_config().max_pos,
-            "no_trade_band": spec.build_config().no_trade_band,
+            "target_vol": cfg.target_vol,
+            "max_pos": cfg.max_pos,
+            "no_trade_band": cfg.no_trade_band,
             "minimum_hold_days": spec.minimum_hold_days,
             "pitch_role": spec.pitch_role,
         })
