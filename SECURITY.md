@@ -24,4 +24,5 @@ Open a private security advisory or contact the repository owner directly before
 
 - Rotate any credentials that may have existed in local branches, Actions logs, screenshots, notebooks, or generated files.
 - Confirm no generated `engine/outputs*`, `engine/data-cache*`, `quote_token.json`, ledger databases, or `.env` files are committed.
-- Run the focused SDK/broker safety tests in `engine/tests` before tagging a release.
+- Run `engine-ci` before tagging a release, including the consolidated SDK/broker/rebalancer/ledger safety suite:
+  `python -m pytest tests/test_tastytrade_sdk_preflight.py tests/test_broker_safety.py tests/test_rebalancer_execution_policy.py tests/test_ledger_execution_status.py tests/test_tastytrade_rest_boundary.py`.
