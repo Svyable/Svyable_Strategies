@@ -82,7 +82,8 @@ jobs:
             tests/test_tastytrade_sdk_preflight.py \
             tests/test_broker_safety.py \
             tests/test_rebalancer_execution_policy.py \
-            tests/test_ledger_execution_status.py
+            tests/test_ledger_execution_status.py \
+            tests/test_tastytrade_rest_boundary.py
 
       - name: Execution artifact regression
         run: python tests/test_execution_artifacts.py
