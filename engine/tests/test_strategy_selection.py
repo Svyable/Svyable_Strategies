@@ -11,6 +11,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from svyable.agent_review_chain import run_review_chain
 from svyable.providers import SyntheticProvider
 from svyable.strategy_activation import activate_latest_selection
 from svyable.strategy_registry import (
@@ -124,6 +125,44 @@ def _board(candidate_utility: float) -> pd.DataFrame:
             "is_current_strategy": True,
         },
     ])
+
+
+def _write_agent_review_context(root: Path) -> None:
+    selection = root / "strategy_selection"
+    selection.mkdir(parents=True, exist_ok=True)
+    context = {
+        "as_of": "2026-07-02",
+        "candidate_set_hash": "abc123",
+        "rails": {
+            "allowed_candidate_ids": ["q23_hybrid_alpha", "hold_current"],
+            "hard_rules": ["Choose exactly one allowed candidate_id."],
+        },
+        "decision_readiness": {"status": "PASS", "issues": []},
+        "focus_candidate_artifact_health": {
+            "status": "ok",
+            "inputs_stale": False,
+            "missing_execution_columns": [],
+        },
+        "candidates": [
+            {"candidate_id": "q23_hybrid_alpha"},
+            {"candidate_id": "hold_current"},
+        ],
+        "summary": {
+            "candidate_count": 2,
+            "eligible_count": 2,
+            "top_eligible_candidate": "q23_hybrid_alpha",
+            "planned_candidate": "q23_hybrid_alpha",
+            "mode": "agent",
+        },
+        "meta_decision_trace": {
+            "visible_regime": {},
+            "selected_score_breakdown": {},
+            "selected_decision_nodes": [],
+        },
+        "selection_explanation": {"summary": "Synthetic activation review fixture."},
+    }
+    (selection / "latest_agent_context.json").write_text(json.dumps(context))
+    (selection / "latest_agent_pm_memo.md").write_text("# Synthetic review memo\n")
 
 
 def test_switch_requires_cost_aware_buffer():
@@ -247,6 +286,16 @@ def test_agent_activation_is_canonical_and_idempotent():
             "reason": "Best net alpha after cost with acceptable turnover.",
         }))
 
+        try:
+            activate_latest_selection(root)
+            raise AssertionError("unreviewed agent decision activated")
+        except RuntimeError as exc:
+            assert "review" in str(exc).lower() or "guard" in str(exc).lower()
+
+        _write_agent_review_context(root)
+        chain = run_review_chain(root)
+        assert chain["status"] == "PASS"
+
         first = activate_latest_selection(root)
         second = activate_latest_selection(root)
         canonical = Path(first["canonical_output_dir"])
@@ -256,6 +305,7 @@ def test_agent_activation_is_canonical_and_idempotent():
 
         assert first == second
         assert first["source"] == "agent"
+        assert first["decision_fingerprint"]
         assert set(weights.index) == {"AAPL", "MSFT"}
         assert state["selected_strategy_id"] == "q23_hybrid_alpha"
         assert meta["selected_strategy_id"] == "q23_hybrid_alpha"
@@ -272,7 +322,8 @@ def test_agent_activation_is_canonical_and_idempotent():
             activate_latest_selection(root)
             raise AssertionError("an activated board accepted a different decision")
         except RuntimeError as exc:
-            assert "already activated" in str(exc)
+            text = str(exc).lower()
+            assert "already activated" in text or "review" in text or "audit" in text
 
 
 if __name__ == "__main__":
