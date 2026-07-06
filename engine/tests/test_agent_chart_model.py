@@ -20,7 +20,7 @@ def _context():
     return {
         "decision_readiness": {"status": "PASS", "next_step": "prepare decision artifact"},
         "focus_candidate_artifact_health": {"inputs_stale": False, "artifact_date": "2026-01-02", "expected_date": "2026-01-02"},
-        "rails": {"allowed_candidate_ids": ["candidate_a", "alpha_a"]},
+        "rails": {"allowed_candidate_ids": ["candidate_a", "alpha_a", "rotation_a"]},
         "meta_decision_trace": {
             "selected_score_breakdown": {
                 "expected_alpha_bps": 10.0,
@@ -31,7 +31,10 @@ def _context():
             },
             "ranked_candidate_trace": [
                 {"candidate_id": "candidate_b", "strategy_id": "legacy", "eligible": False, "action": "rebalance", "score_breakdown": {"utility_bps": 3.0, "expected_alpha_bps": 8.0}},
+                {"candidate_id": "rotation_a", "strategy_id": "svyable_rotation_breadth", "eligible": True, "action": "rebalance", "score_breakdown": {"utility_bps": 8.0, "expected_alpha_bps": 12.5}},
                 {"candidate_id": "alpha_a", "strategy_id": "svyable_alpha_catalyst", "eligible": True, "action": "rebalance", "score_breakdown": {"utility_bps": 7.5, "expected_alpha_bps": 12.0, "estimated_cost_bps": 1.0, "turnover_penalty_bps": 1.5, "risk_penalty_bps": 2.0}},
+                {"candidate_id": "downside_a", "strategy_id": "svyable_downside_resilience", "eligible": True, "action": "rebalance", "score_breakdown": {"utility_bps": 5.0, "expected_alpha_bps": 8.0}},
+                {"candidate_id": "lead_a", "strategy_id": "svyable_leadership_quality", "eligible": True, "action": "rebalance", "score_breakdown": {"utility_bps": 4.5, "expected_alpha_bps": 8.5}},
                 {"candidate_id": "tape_a", "strategy_id": "svyable_tape_acceleration", "eligible": True, "action": "rebalance", "score_breakdown": {"utility_bps": 4.0, "expected_alpha_bps": 9.0}},
                 {"candidate_id": "candidate_a", "strategy_id": "legacy", "eligible": True, "action": "rebalance", "score_breakdown": {"utility_bps": 6.5, "expected_alpha_bps": 10.0}},
             ],
@@ -50,27 +53,28 @@ def test_utility_waterfall_has_signed_components():
 def test_candidate_ranking_sorts_by_utility():
     rows = candidate_ranking_rows(_context())
 
-    assert rows[0]["candidate"] == "alpha_a"
+    assert rows[0]["candidate"] == "rotation_a"
     assert rows[0]["eligible"] is True
 
 
 def test_alpha_candidate_spotlight_filters_and_sorts_alpha_books():
     rows = alpha_candidate_rows(_context())
 
-    assert [row["candidate_id"] for row in rows] == ["alpha_a", "tape_a"]
-    assert rows[0]["family"] == "Alpha Catalyst"
+    assert [row["candidate_id"] for row in rows] == ["rotation_a", "alpha_a", "downside_a", "lead_a", "tape_a"]
+    assert rows[0]["family"] == "Rotation Breadth"
     assert rows[0]["allowed"] is True
-    assert rows[1]["allowed"] is False
+    assert rows[2]["family"] == "Downside Resilience"
+    assert rows[-1]["allowed"] is False
 
 
 def test_alpha_candidate_metrics_identify_best_alpha_candidate():
     metrics = alpha_candidate_metrics(_context())
 
-    assert metrics["alpha_candidates"] == 2
-    assert metrics["allowed_alpha_candidates"] == 1
-    assert metrics["eligible_alpha_candidates"] == 2
-    assert metrics["best_alpha_candidate"] == "alpha_a"
-    assert metrics["best_alpha_utility_bps"] == 7.5
+    assert metrics["alpha_candidates"] == 5
+    assert metrics["allowed_alpha_candidates"] == 2
+    assert metrics["eligible_alpha_candidates"] == 5
+    assert metrics["best_alpha_candidate"] == "rotation_a"
+    assert metrics["best_alpha_utility_bps"] == 8.0
 
 
 def test_activation_readiness_rows_capture_final_gates():
