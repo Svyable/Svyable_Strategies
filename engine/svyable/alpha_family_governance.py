@@ -1,7 +1,7 @@
 """Alpha-family governance helpers.
 
 This module summarizes the newest Svyable factor families and strategies without
-changing candidate selection, targets, or operations. It gives the PM a compact
+changing candidate selection or operational artifacts. It gives the PM a compact
 view of what is in the incubation stack and which families still need more
 health evidence.
 """
@@ -17,8 +17,10 @@ import pandas as pd
 
 from svyable.factor_library import factor_metadata
 from svyable.strategy_alpha_catalyst import ALPHA_CATALYST
+from svyable.strategy_downside_resilience import DOWNSIDE_RESILIENCE
 from svyable.strategy_leadership_quality import LEADERSHIP_QUALITY
 from svyable.strategy_registry import get_strategy
+from svyable.strategy_rotation_breadth import ROTATION_BREADTH
 from svyable.strategy_tape_acceleration import TAPE_ACCELERATION
 
 
@@ -26,12 +28,16 @@ ALPHA_FAMILIES: dict[str, tuple[str, ...]] = {
     "alpha_catalyst": ALPHA_CATALYST,
     "tape_acceleration": TAPE_ACCELERATION,
     "leadership_quality": LEADERSHIP_QUALITY,
+    "downside_resilience": DOWNSIDE_RESILIENCE,
+    "rotation_breadth": ROTATION_BREADTH,
 }
 
 ALPHA_STRATEGIES: tuple[str, ...] = (
     "svyable_alpha_catalyst",
     "svyable_tape_acceleration",
     "svyable_leadership_quality",
+    "svyable_downside_resilience",
+    "svyable_rotation_breadth",
 )
 
 
@@ -109,7 +115,7 @@ def alpha_family_governance_report(catalog: pd.DataFrame | None = None) -> dict[
         "factor_rows": factor_rows,
         "blockers": blockers,
         "warnings": warnings,
-        "contract": "Read-only alpha-family governance: does not compute targets, make decisions, or alter operations.",
+        "contract": "Read-only alpha-family governance: does not compute portfolios, make decisions, or modify operations.",
     }
 
 
