@@ -119,6 +119,30 @@ def test_decision_scorecard_map_has_edge_axis():
 
 
 @pytest.mark.skipif(not interactive.available(), reason="Plotly is not installed")
+def test_signed_bar_builds_positive_negative_trace_groups():
+    fig = interactive.signed_bar(pd.Series({"a": -0.02, "b": 0.01}), title="Stress", xlabel="Return")
+    assert len(fig.data) >= 1
+    assert fig.layout.xaxis.title.text == "Return"
+
+
+@pytest.mark.skipif(not interactive.available(), reason="Plotly is not installed")
+def test_matrix_heatmap_builds_heatmap():
+    matrix = pd.DataFrame([[0.1, -0.2], [0.0, 0.3]], index=["s1", "s2"], columns=["m1", "m2"])
+    fig = interactive.matrix_heatmap(matrix, title="Monthly candidate returns")
+    assert len(fig.data) == 1
+    assert "Monthly" in fig.layout.title.text
+
+
+@pytest.mark.skipif(not interactive.available(), reason="Plotly is not installed")
+def test_drawdown_tape_builds_traces():
+    idx = pd.bdate_range("2026-01-01", periods=4)
+    drawdowns = pd.DataFrame({"a": [0.0, -0.01, -0.02, -0.005], "b": [0.0, 0.0, -0.01, -0.02]}, index=idx)
+    fig = interactive.drawdown_tape(drawdowns)
+    assert len(fig.data) == 2
+    assert fig.layout.hovermode == "x unified"
+
+
+@pytest.mark.skipif(not interactive.available(), reason="Plotly is not installed")
 def test_multi_equity_builds_traces():
     idx = pd.bdate_range("2026-01-01", periods=5)
     curves = {
