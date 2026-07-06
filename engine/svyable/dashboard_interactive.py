@@ -2,7 +2,8 @@
 
 Matplotlib remains the robust static fallback. Plotly is used where interactivity
 materially improves the PM workflow: hoverable candidate diagnostics, zoomable
-risk/return maps, and readable multi-strategy equity curves.
+risk/return maps, stress tapes, overlap heatmaps, and readable multi-strategy
+equity curves.
 """
 
 from __future__ import annotations
@@ -232,7 +233,92 @@ def decision_scorecard_map(scorecard: pd.DataFrame):
     return fig
 
 
-def multi_equity(curves: Mapping[str, pd.Series], *, highlight: str | None = None):
+def signed_bar(series: pd.Series, *, title: str, xlabel: str = ""):
+    """Interactive horizontal signed bar chart for stress and tail diagnostics."""
+    _require_plotly()
+    clean = pd.Series(series).dropna().astype(float).sort_values()
+    frame = pd.DataFrame({"name": clean.index.astype(str), "value": clean.values})
+    frame["sign"] = frame["value"].map(lambda value: "positive" if value >= 0 else "negative")
+    fig = px.bar(
+        frame,
+        x="value",
+        y="name",
+        color="sign",
+        orientation="h",
+        title=title,
+        template=_DARK_TEMPLATE,
+        color_discrete_map={"positive": "#2ecc71", "negative": "#e74c3c"},
+        hover_data={"value": ":.3%", "sign": False, "name": False},
+    )
+    fig.add_vline(x=0, line_dash="dash", line_color="rgba(255,255,255,0.45)")
+    fig.update_layout(
+        height=max(360, 26 * len(frame) + 120),
+        margin=dict(l=10, r=10, t=55, b=35),
+        xaxis_title=xlabel,
+        yaxis_title="",
+        showlegend=False,
+    )
+    return fig
+
+
+def matrix_heatmap(
+    matrix: pd.DataFrame,
+    *,
+    title: str,
+    z_format: str = ".2%",
+    colorscale: str = "RdYlGn",
+):
+    """Interactive heatmap for monthly returns, overlap, IC, and position matrices."""
+    _require_plotly()
+    frame = matrix.copy()
+    fig = px.imshow(
+        frame,
+        aspect="auto",
+        color_continuous_scale=colorscale,
+        title=title,
+        template=_DARK_TEMPLATE,
+        text_auto=z_format,
+    )
+    fig.update_layout(
+        height=max(420, 22 * len(frame) + 150),
+        margin=dict(l=10, r=10, t=55, b=40),
+        xaxis_title="",
+        yaxis_title="",
+    )
+    return fig
+
+
+def drawdown_tape(drawdowns: pd.DataFrame, *, title: str = "Drawdown tape"):
+    """Interactive multi-candidate drawdown tape."""
+    _require_plotly()
+    fig = go.Figure()
+    for name in drawdowns.columns:
+        series = pd.Series(drawdowns[name]).dropna().astype(float)
+        if series.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=series.index,
+                y=series.values,
+                mode="lines",
+                name=str(name),
+                hovertemplate="%{x}<br>%{y:.2%}<extra>%{fullData.name}</extra>",
+            )
+        )
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.35)")
+    fig.update_layout(
+        title=title,
+        template=_DARK_TEMPLATE,
+        height=580,
+        margin=dict(l=10, r=10, t=55, b=35),
+        xaxis_title="Date",
+        yaxis_title="Drawdown",
+        hovermode="x unified",
+    )
+    return fig
+
+
+def multi_equity(curves: Mapping[str, pd.Series], *, highlight: str | None = None, title: str = "Candidate equity curves"):
     """Interactive normalized NAV overlay for candidate return curves."""
     _require_plotly()
     fig = go.Figure()
@@ -254,7 +340,7 @@ def multi_equity(curves: Mapping[str, pd.Series], *, highlight: str | None = Non
             )
         )
     fig.update_layout(
-        title="Candidate equity curves",
+        title=title,
         template=_DARK_TEMPLATE,
         height=650,
         margin=dict(l=10, r=10, t=60, b=40),
