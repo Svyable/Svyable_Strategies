@@ -1,66 +1,130 @@
-# Launch Readiness — Day-1 Inspection Record
+# Launch Readiness — Go-Live Inspection Record
 
-Status: v1.0 (2026-07-02, prelaunch). Every claim below was verified by running
-the command shown on this machine on this date. Companions: README.md
-(narrative), production.md (gates), ops/SANDBOX.md (cert runbook),
-ops/CLAUDE_LOOP.md (daily contract).
+Status: **sandbox go-live candidate / production capital blocked** (refreshed 2026-07-05).
 
-## Verified today, with evidence
+This document is a codebase-review readiness record, not a claim that today's machine-level commands have already run. The current repo implements the daily candidate board, agent context pack, guarded decision, review receipt/audit chain, sandbox check, ledger, and canonical activation path. Go-live here means **validation-era sandbox/paper operations**. Production capital remains blocked by the gates in `production.md`.
 
-| Claim | Evidence (2026-07-02) |
-|---|---|
-| Full offline suite green | `pytest tests/` → **38 passed, 0 failed** |
-| Golden-weights gate green and meaningful | Re-blessed deliberately after the v0.2.0 config change (IC gating + ML hyperparameters, commit a48b3e8 had skipped the re-bless). New hash `662b6941bf669a54e4b8e628` @ config `6a8d224e9ad53d92`; byte-identical on rerun |
-| No look-ahead anywhere in the pipeline | `test_causality_future_blindness` — truncate-at-T weights identical to 1e-9 |
-| Restatement defense works on real data | Today's refresh detected a vendor-wide re-adjustment (~115 names) and forced a clean full refetch instead of caching a corrupted seam |
-| Bad-print detection works on real data | 3 suspect ±40% spike-and-reverse bars flagged (FANG, HOOD, PDD); run marked DEGRADED, not silently trusted |
-| Multi-strategy candidate board runs end-to-end | First board produced: `outputs/strategy_selection/20260702_224449/` — 7 registered candidates + hold_current, hash `e53161d0d45eba8288551704` |
-| Agent contract enforces its gates | Tampered hash → `RuntimeError: Agent decision hash does not match`; ineligible candidate → `RuntimeError: Agent selected an ineligible candidate`; both refused before any weights were emitted |
-| Legitimate decision activates exactly once | `q23_concentrated` activated; canonical artifacts under `outputs/svyable_nasdaq_lo/20260702_224449/`; re-running activation returns the original record (same `activated_at`), never a second book |
-| Every step left a ledger trail | `runs` table: daily_selection (evaluated) → strategy_activation rows, all hash-stamped |
-| Concentrated flagship registered and gated | `q23_concentrated`: 7–10 seats, 12% ceiling, full Q23 ensemble; mandate enforced by `test_concentrated_flagship_matches_mandate` |
-| Sandbox fills cannot poison economics | Cert fill prices tagged `synthetic_fills`; slippage escalation suppressed to info-level in sandbox (`test_sandbox_synthetic_fills_do_not_escalate`) |
+## Readiness verdict
 
-## Day-1 board result (first live-data selection)
+| Scope | Verdict | Reason |
+|---|---|---|
+| Daily PM loop | **READY FOR SANDBOX GO-LIVE AFTER LOCAL SMOKE** | `strategy_daily` evaluates candidates and writes agent context packs in agent/evaluate-only mode; launchd script now runs strict daily selection with heartbeat logging. |
+| Agentic decision loop | **READY FOR CONTROLLED USE** | The writer fills date/hash from context, guard validates allowed candidate + artifact readiness, and review chain freezes hashes before activation. |
+| Canonical activation | **READY FOR SANDBOX/PAPER** | Activation validates board date/hash/eligibility and emits exactly one canonical artifact directory. |
+| Broker sandbox plumbing | **READY AFTER CREDENTIALS CHECK** | `sandbox_check` validates OAuth/account/quote/dry-run and refuses production credentials. |
+| Production live capital | **BLOCKED** | Gate B/C evidence is not yet complete: sustained sandbox operating record, account kill-switch fire drill, production sign-off, measured execution costs, and live-enable controls. |
 
-The deterministic selector and the agent decision independently converged on
-**q23_concentrated** — the 7–10-name flagship — as the bootstrap activation:
-highest trailing 252-day Sharpe (2.49) among eligible candidates. The activated
-book: 7 seats, equal-weighted at the 12% relative ceiling, gross throttled to
-0.40x by the risk overlay (trailing vol 23% vs 17% target — the budget system
-binding exactly as specified).
+## Codebase evidence reviewed
 
-## Honest observations a reviewer should raise (we raise them first)
+| Area | Evidence in repo | Readiness implication |
+|---|---|---|
+| Current truth | README says Svyable is paper-operational research infrastructure and explicitly disclaims live-capital performance. | Ops docs must not describe this as live-capital ready. |
+| Agent context pack | `agent_pm_harness.py` builds `agent_context.json`, `agent_pm_memo.md`, decision rails, artifact health, factor warnings, visible meta trace, and counterfactuals. | PM/agent receives auditable context, not a blank prompt. |
+| Daily runner | `strategy_daily.py` refreshes data, checks staleness/degradation, evaluates candidates, writes current-position snapshots, and writes the agent context pack when awaiting agent. | Morning launchd can stop at board/context generation in agent mode. |
+| Guarded writer | `agent_decision_writer.py` reads the latest context, restricts candidate IDs to allowed IDs, writes date/hash automatically, and immediately runs the guard. | Hash and date errors should not come from manual editing. |
+| Guard | `agent_decision_guard.py` validates required fields, context readiness, date/hash, allowed candidate, confidence, reason, artifact freshness, and required execution columns. | Activation should be preceded by a deterministic PASS/BLOCK report. |
+| Receipt and audit | `agent_review_receipt.py` freezes decision/context/memo/guard file hashes; `agent_review_audit.py` checks they are unchanged. | The review state is tamper-evident before activation. |
+| Review chain | `agent_review_chain.py` orchestrates optional context refresh, guard, receipt, and audit without writing decisions, targets, or orders. | One operator command can verify the non-trading review package. |
+| Activation | `strategy_activation.py` rejects stale/mismatched/ineligible decisions and writes one canonical `outputs/svyable_nasdaq_lo/<tag>/` artifact. | Portfolio Ops and broker preflight have a single canonical target. |
+| Credentials | `broker_settings.py` loads canonical `TASTY_*` variables, accepts legacy `TT_*` aliases, defaults to sandbox, and keeps `SVYABLE_ENABLE_LIVE=false` unless explicitly changed. | Sandbox is the safe default; production requires multiple deliberate changes. |
+| Sandbox check | `sandbox_check.py` refuses production credentials and performs read-only/session/quote/dry-run checks without submitting orders. | This is the first real-account gate before any sandbox order workflow. |
+| CLI | `svyable auth`, `svyable universe`, `svyable session`, `svyable health`, `svyable tasty`, and `svyable rebalance --broker tasty` exist for onboarding, health, and broker workflow. | Ops docs can use installed commands instead of manual Python one-offs. |
+| Tests present | Agent pack/writer tests verify context/memo/template generation and disallowed-candidate rejection. | Specific agentic rails have unit coverage; run the full suite locally before go-live. |
 
-1. **Theme concentration.** Today's 7 names are all semiconductors/storage.
-   The statistical cluster brake is active but links only pairs with trailing
-   corr > 0.70; measured median pairwise corr of this book is 0.55 (max 0.90 in
-   the memory trio), so the theme as a whole legitimately escapes the cap.
-   Standing research item: cluster-threshold sensitivity for the concentrated
-   flagship (a 9-name book needs a stricter notion of "same bet" than a
-   25-name book).
-2. **Candidate backtests are survivorship-biased** until PIT snapshot
-   accumulation has history (`universe.py` starts the clock the day
-   credentials exist). The 63.58% / Sharpe 3.545 reference is a Q23 contest
-   result, not a Svyable claim.
-3. **Selection estimates are forecasts.** Board `expected_alpha_bps` is a
-   causal estimate for ranking candidates, not a promised return.
-4. **The operating record is zero days old.** Everything above proves the
-   machine works once; Gate B requires it to work for 60 clean days.
+## Day-0 local verification checklist
 
-## Blocked only on credentials (sandbox portal, ~15 minutes)
+Run these on the target Mac before trusting the launchd job:
 
-1. OAuth2 app → client secret; refresh token (read + trade); sandbox account
-   number → `engine/.env` per ops/SANDBOX.md.
-2. Then, in order: `python -m svyable.sandbox_check` → `svyable universe`
-   (starts the irreplaceable PIT clock) → load
-   `ops/com.svyable.daily.plist` → set `SVYABLE_HEALTHCHECK_URL` (arms the
-   dead-man switch).
+```bash
+cd ~/Svyable_Strategies/engine
+source .venv/bin/activate
 
-## Standing configuration decisions on record
+python -m pytest tests/
+python -m svyable.cli --env sandbox smoke
+python -m svyable.sandbox_check
+python -m svyable.cli --env sandbox universe
+python -m svyable.strategy_daily --env sandbox --provider yf --start 2020-01-01 --strict
+python -m svyable.agent_decision_guard --out outputs --write || true
+python -m svyable.cli --env sandbox --out outputs health
+```
 
-- Selection policy: **agent mode** (`outputs/strategy_selection/policy.json`)
-  per the validation-era contract in ops/CLAUDE_LOOP.md — deterministic code
-  evaluates, the PM/agent picks a candidate ID, activation validates.
-- `SVYABLE_ENABLE_LIVE=false`; production bulk submission disabled; sandbox is
-  the only execution venue until the production gates in production.md pass.
+Expected first-day interpretation:
+
+- Full tests must pass before launchd is loaded.
+- Smoke must pass without network.
+- `sandbox_check` must return `PASS` before any broker sandbox workflow.
+- `strategy_daily` in agent mode should produce a board/context pack and normally end with `awaiting_agent`.
+- `agent_decision_guard` may return `BLOCK` until a decision is written; that is expected.
+- `health` should show the latest selection run and no unexplained critical warnings.
+
+## Sandbox go-live sequence
+
+1. Confirm `engine/.env` exists and contains only sandbox-safe values:
+   - `TASTY_IS_TEST=true`
+   - `SVYABLE_ENV=sandbox`
+   - `SVYABLE_ENABLE_LIVE=false`
+   - canonical `TASTY_CLIENT_SECRET`, `TASTY_REFRESH_TOKEN`, `TASTY_ACCOUNT_NUMBER`
+2. Run `python -m svyable.sandbox_check`.
+3. Run `python -m svyable.cli --env sandbox universe` to start / refresh PIT snapshot accumulation.
+4. Run one manual strict daily cycle:
+   `python -m svyable.strategy_daily --env sandbox --provider yf --start 2020-01-01 --strict`.
+5. Review `outputs/strategy_selection/latest_agent_pm_memo.md`.
+6. Write a guarded decision:
+   `svyable-agent-decide --out outputs --candidate <allowed_candidate_id> --confidence 0.60 --reason "<artifact-derived rationale>"`.
+7. Run `svyable-agent-review-chain --out outputs` and require `PASS`.
+8. Activate only after human approval:
+   `svyable-strategy-activate --out outputs --env sandbox`.
+9. Review `svyable --env sandbox --out outputs health` and Portfolio Ops.
+10. Only then run a sandbox dry-run/preflight or a human-triggered sandbox submission workflow.
+
+## LaunchAgent status
+
+`ops/com.svyable.daily.plist` is now configured for the target validation-era loop:
+
+- weekdays at 06:30 local America/Chicago time, i.e. 07:30 New York market time;
+- sandbox environment;
+- strict daily data handling;
+- explicit output root;
+- logs to `/tmp/com.svyable.daily.out` and `/tmp/com.svyable.daily.err`;
+- script-level heartbeat logging and optional external healthcheck pings.
+
+Install / refresh:
+
+```bash
+cp ~/Svyable_Strategies/ops/com.svyable.daily.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.svyable.daily.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.svyable.daily.plist
+launchctl list | grep svyable
+```
+
+Manual dry-run of the launch target:
+
+```bash
+SVYABLE_ENV=sandbox \
+SVYABLE_PROVIDER=yf \
+SVYABLE_STRICT_DAILY=true \
+zsh ~/Svyable_Strategies/ops/run_daily.sh
+```
+
+## Production blockers still open
+
+Production capital remains blocked until all are true:
+
+1. At least 60 clean sandbox/paper operating days are recorded.
+2. Heartbeat uptime is at or above the pre-committed threshold.
+3. Reconciliation drift is explained and within Gate-B tolerance.
+4. PIT universe snapshots have accumulated and walkforward remains robust.
+5. Account-based kill switch is built, tested, and fire-drilled.
+6. Order lifecycle edge cases are fire-drilled: rejection, working limit, cancel/replace, partial fill/delayed fill, duplicate batch.
+7. Measured sandbox/live-like execution-cost evidence has been reviewed and fed back into cost assumptions where appropriate.
+8. Human sign-off packet exists with candidate history, review receipts, audits, health logs, fills, drift, exceptions, and resolved warnings.
+9. Only then consider `TASTY_IS_TEST=false`, `SVYABLE_ENV=production`, and `SVYABLE_ENABLE_LIVE=true` with account-number confirmation.
+
+## Honest caveats to keep visible
+
+- The platform has engineering evidence, not a live-capital track record.
+- Sandbox fills have no economic signal and must never support performance claims.
+- Seed-universe history remains survivorship-biased until PIT snapshots have sufficient history.
+- Agent reasoning is limited to visible artifacts and allowed candidate IDs.
+- Same-cycle code or policy edits remain forbidden during a board/activation cycle.
+- If any local verification command fails, stay in manual research mode and do not load the launchd job.
