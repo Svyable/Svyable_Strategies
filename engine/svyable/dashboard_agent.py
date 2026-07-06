@@ -7,14 +7,16 @@ This is the "new and improved" surface for Svyable's agentic setup. It composes:
 2. Board visualizations — per-candidate utility / net-alpha rankings and an
    alpha-vs-turnover scatter, so the trade-off the agent optimizes is legible.
 3. A PM decision scorecard — GREENLIGHT / REVIEW / HOLD / BLOCK language that
-   compresses edge, turnover, overlap, drawdown, volatility, and eligibility.
-4. A cross-candidate equity overlay — every eligible recipe's shadow NAV on one
+   compresses edge, turnover, overlap, drawdown, volatility, cost, and eligibility.
+4. A daily playbook — PM one-pager style cards for every candidate strategy.
+5. A cross-candidate equity overlay — every eligible recipe's shadow NAV on one
    axis, the currently-held strategy highlighted.
-5. A Q23-style stress and what-if lab — red-market survival, drawdown recovery,
+6. A Q23-style stress and what-if lab — red-market survival, drawdown recovery,
    monthly candidate heatmaps, and research-only blend experiments.
 
 Then it delegates to the existing :func:`render_strategy_selector` control
-surface (policy, chimera blends, evaluation, activation).
+surface (policy, chimera blends, evaluation, activation) which was previously
+built but never wired into the app.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from svyable import dashboard_interactive as interactive
 from svyable.dashboard_candidate_analysis import render_candidate_analytics
 from svyable.dashboard_compare import render_comparison
 from svyable.dashboard_data import load_candidate_returns, load_candidate_weights
+from svyable.dashboard_playbook import render_strategy_playbook
 from svyable.dashboard_stack import render_overlap
 from svyable.dashboard_strategy_selector import render_frontier_coverage, render_strategy_selector
 from svyable.dashboard_stress import render_stress_lab
@@ -157,7 +160,11 @@ def _render_pm_scorecard(board: pd.DataFrame) -> pd.DataFrame:
         "recent_max_drawdown",
         "risk_flags",
     ]
-    st.dataframe(scorecard[[col for col in table_cols if col in scorecard.columns]], use_container_width=True, hide_index=True)
+    st.dataframe(
+        scorecard[[col for col in table_cols if col in scorecard.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
     if interactive.available():
         render_plotly(interactive.decision_scorecard_map(scorecard))
     return scorecard
@@ -184,8 +191,14 @@ def render_agent(output_root: str | Path) -> None:
 
     _render_decision_hero(service, board)
 
-    board_tab, compare_tab, stress_tab, control_tab = st.tabs(
-        ["🎯 Board", "⚖️ Compare strategies", "🧪 Stress / what-if lab", "🛠️ Control surface"]
+    board_tab, playbook_tab, compare_tab, stress_tab, control_tab = st.tabs(
+        [
+            "🎯 Board",
+            "📖 Playbook",
+            "⚖️ Compare strategies",
+            "🧪 Stress / what-if lab",
+            "🛠️ Control surface",
+        ]
     )
 
     curves = load_candidate_returns(service.output_root, board)
@@ -217,6 +230,9 @@ def render_agent(output_root: str | Path) -> None:
                 "cost-aware utility, hollow when ineligible, gold-ringed when held. "
                 "Use hover, zoom, and legend filtering to inspect the exact alpha/cost trade-off."
             )
+
+    with playbook_tab:
+        render_strategy_playbook(service, board)
 
     with compare_tab:
         if len(curves) >= 2:
