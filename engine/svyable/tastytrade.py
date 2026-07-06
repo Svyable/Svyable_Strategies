@@ -4,19 +4,10 @@
 quote-token retrieval, or DXLink candle support. Order management must use the
 SDK adapter in ``svyable.tastytrade_sdk.TastySdkBroker``.
 
-Environments (never mixed):
-  sandbox     https://api.cert.tastyworks.com   (default — fake money)
-  production  https://api.tastyworks.com        (requires TT_ENV=production explicitly)
-
-Auth (auto-selected from env):
-  OAuth2:  TT_CLIENT_ID + TT_CLIENT_SECRET + TT_REFRESH_TOKEN
-           -> POST /oauth/token; access tokens live 15 min, refreshed with 60s margin;
-           Authorization: Bearer <token>
-  Session: TT_USERNAME + TT_PASSWORD (typical for sandbox)
-           -> POST /sessions; Authorization: <session-token> (no Bearer prefix)
-
-Optional: TT_ACCOUNT pins the account number for callers that resolve account
-metadata through REST.
+Settings are loaded through ``svyable.broker_settings.TastySettings`` so OAuth,
+SDK execution, and REST data transport share one environment contract. Canonical
+``TASTY_*`` names are preferred; legacy ``TT_*`` aliases remain accepted through
+that settings layer.
 
 API conventions honored: mandatory User-Agent, dasherized JSON keys, {"data": ...}
 response envelope, query-array `key[]=` params, 429 backoff, one re-auth on 401.
@@ -24,13 +15,13 @@ response envelope, query-array `key[]=` params, 429 backoff, one re-auth on 401.
 
 from __future__ import annotations
 
-import os
 import time
+from dataclasses import replace
 from typing import Any
 
+from svyable.broker_settings import TastySettings
+
 USER_AGENT = "svyable-engine/0.1"
-SANDBOX_URL = "https://api.cert.tastyworks.com"
-PRODUCTION_URL = "https://api.tastyworks.com"
 
 __all__ = ["TastytradeClient"]
 
@@ -43,28 +34,36 @@ class TastytradeClient:
     broker adapter. All order lifecycle code belongs in ``TastySdkBroker``.
     """
 
-    def __init__(self, env: str | None = None, allow_production: bool = False):
-        self.env = (env or os.environ.get("TT_ENV", "sandbox")).lower()
+    def __init__(
+        self,
+        env: str | None = None,
+        allow_production: bool = False,
+        settings: TastySettings | None = None,
+    ):
+        base_settings = settings or TastySettings.from_env(require_credentials=False)
+        if env is not None:
+            requested = env.lower().strip()
+            if requested not in {"sandbox", "production", "cert", "test"}:
+                raise ValueError("env must be sandbox or production")
+            base_settings = replace(base_settings, is_test=requested != "production")
+
+        self.settings = base_settings
+        self.env = self.settings.environment
         if self.env == "production" and not allow_production:
             raise RuntimeError("production env requires allow_production=True from the caller")
-        self.base = PRODUCTION_URL if self.env == "production" else SANDBOX_URL
+        self.base = self.settings.api_base
 
-        self._client_id = os.environ.get("TT_CLIENT_ID", "")
-        self._client_secret = os.environ.get("TT_CLIENT_SECRET", "")
-        self._refresh_token = os.environ.get("TT_REFRESH_TOKEN", "")
-        self._username = os.environ.get("TT_USERNAME", "")
-        self._password = os.environ.get("TT_PASSWORD", "")
-
-        # per docs, the refresh grant requires refresh_token + client_secret
-        # (client_id is included when present; harmless per RFC 6749)
-        if self._refresh_token and self._client_secret:
+        # OAuth refresh-token transport is canonical. Username/password session
+        # auth remains available for sandbox-only legacy setups.
+        if self.settings.has_oauth_refresh_credentials:
             self.auth_mode = "oauth"
-        elif self._username and self._password:
+        elif self.settings.has_session_credentials:
             self.auth_mode = "session"
         else:
             raise RuntimeError(
-                "set TT_CLIENT_ID/TT_CLIENT_SECRET/TT_REFRESH_TOKEN (OAuth) or "
-                "TT_USERNAME/TT_PASSWORD (sandbox session) in the environment")
+                "set TASTY_CLIENT_SECRET/TASTY_REFRESH_TOKEN (OAuth) or "
+                "TASTY_USERNAME/TASTY_PASSWORD (sandbox session) in the environment"
+            )
 
         self._token: str = ""
         self._token_expiry: float = 0.0
@@ -76,9 +75,9 @@ class TastytradeClient:
         if self.auth_mode == "oauth":
             r = requests.post(f"{self.base}/oauth/token", json={
                 "grant_type": "refresh_token",
-                "refresh_token": self._refresh_token,
-                "client_id": self._client_id,
-                "client_secret": self._client_secret,
+                "refresh_token": self.settings.refresh_token,
+                "client_id": self.settings.client_id,
+                "client_secret": self.settings.client_secret,
             }, headers={"User-Agent": USER_AGENT}, timeout=15)
             r.raise_for_status()
             js = r.json()
@@ -86,7 +85,7 @@ class TastytradeClient:
             self._token_expiry = time.time() + float(js.get("expires_in", 900)) - 60
         else:
             r = requests.post(f"{self.base}/sessions", json={
-                "login": self._username, "password": self._password,
+                "login": self.settings.username, "password": self.settings.password,
                 "remember-me": True,
             }, headers={"User-Agent": USER_AGENT}, timeout=15)
             r.raise_for_status()
