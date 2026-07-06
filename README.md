@@ -13,7 +13,7 @@ Svyable is **paper-operational research infrastructure**. It is not yet a live-c
 - **Decision ticket:** the scorecard produces a copy-ready guarded-decision rationale plus downloadable markdown/CSV for review notes and audit handoff.
 - **Agentic PM rails:** context pack, memo, guarded decision writer, guard, receipt, audit, and one-click review chain keep the agent/human choice hash-matched and reviewable.
 - **Streamlit command surfaces:** PM Command Center, Agent Lab, Selection Meta Harness, Factor Governance, Analytics/Arcana, Factor Health, Portfolio Ops, and audit views.
-- **Interactive PM charts:** the GUI extra now includes Plotly for hoverable/zoomable candidate rankings, decision scorecard maps, alpha-vs-turnover maps, and multi-strategy equity overlays. Matplotlib remains the static fallback.
+- **Interactive PM charts:** the GUI extra includes Plotly for hoverable/zoomable candidate rankings, decision scorecard maps, stress-lab bars, drawdown tapes, monthly heatmaps, position-overlap heatmaps, alpha-vs-turnover maps, and multi-strategy equity overlays. Matplotlib remains the static fallback.
 - **Deterministic PM one-pager:** `tests/test_regression.py` renders `golden_weights_human.md` with provenance, holdings, risk posture, regime stack, Markov price-action state, sleeve IC health, factor stack, and construction settings.
 - **Complete strategy frontier:** every registered strategy owns factors, construction, concentration, risk, cost, cadence, maturity, and an operating role.
 - **Alpha families:** price-action, residual, defensive, reversal, liquidity, behavioral, frontier tape-reading, tape-acceleration, alpha-catalyst, rotation-breadth, and clearly labeled daily-flow proxy factors.
@@ -33,7 +33,7 @@ Svyable is **paper-operational research infrastructure**. It is not yet a live-c
 1. Refresh and validate the daily OHLCV panel.
 2. Compute governed factors and build candidate artifacts for every enabled strategy/chimera.
 3. Write the immutable candidate board and PM context pack.
-4. Review Streamlit: Agent Lab decision scorecard, Selection Meta Harness, Factor Governance, and Portfolio Ops readiness.
+4. Review Streamlit: Agent Lab decision scorecard, Stress Lab, Selection Meta Harness, Factor Governance, and Portfolio Ops readiness.
 5. Copy the decision-ticket rationale into the guarded decision writer only after human review.
 6. Write exactly one guarded decision from an allowed `candidate_id`.
 7. Run guard → receipt → audit.
