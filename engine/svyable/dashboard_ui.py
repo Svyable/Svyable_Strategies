@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import matplotlib.pyplot as plt
 import streamlit as st
 from matplotlib.figure import Figure
@@ -17,6 +19,19 @@ def render_figure(fig: Figure) -> None:
     """
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
+
+
+def render_plotly(fig: Any) -> None:
+    """Render a Plotly figure with Streamlit's full-width container."""
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "displaylogo": False,
+            "scrollZoom": True,
+            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+        },
+    )
 
 
 def money(value: object) -> str:
