@@ -81,7 +81,7 @@ def weak_breadth_relative_reclaim(panel: Panel, cfg: SvyableConfig) -> pd.DataFr
     reclaim = (intraday / (atr_pct + EPS)).clip(-5.0, 5.0).clip(lower=0.0)
     relative_day = panel.ret.sub(panel.ret.median(axis=1), axis=0)
     rel_strength = (relative_day / (panel.ret.rolling(42, min_periods=21).std() + EPS)).clip(-5.0, 5.0).clip(lower=0.0)
-    return (reclaim * rel_strength * (1.0 + 4.0 * weak_breadth).to_frame().reindex(columns=panel.close.columns).ffill(axis=1)).clip(-5.0, 5.0)
+    return (reclaim * rel_strength).mul(1.0 + 4.0 * weak_breadth, axis=0).clip(-5.0, 5.0)
 
 
 def register_rotation_breadth() -> None:
