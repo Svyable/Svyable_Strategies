@@ -2,8 +2,8 @@
 
 Matplotlib remains the robust static fallback. Plotly is used where interactivity
 materially improves the PM workflow: hoverable candidate diagnostics, zoomable
-risk/return maps, stress tapes, overlap heatmaps, and readable multi-strategy
-equity curves.
+risk/return maps, stress tapes, overlap heatmaps, factor-health maps, and
+readable multi-strategy equity curves.
 """
 
 from __future__ import annotations
@@ -314,6 +314,123 @@ def drawdown_tape(drawdowns: pd.DataFrame, *, title: str = "Drawdown tape"):
         xaxis_title="Date",
         yaxis_title="Drawdown",
         hovermode="x unified",
+    )
+    return fig
+
+
+def return_distribution(returns: pd.Series, *, title: str = "Return distribution"):
+    """Interactive return-distribution histogram with hoverable bins."""
+    _require_plotly()
+    clean = pd.Series(returns).dropna().astype(float)
+    fig = px.histogram(
+        clean,
+        nbins=60,
+        title=title,
+        template=_DARK_TEMPLATE,
+        labels={"value": "Daily return", "count": "Days"},
+    )
+    fig.add_vline(x=0, line_dash="dash", line_color="rgba(255,255,255,0.45)")
+    fig.update_layout(height=430, margin=dict(l=10, r=10, t=55, b=35), showlegend=False)
+    return fig
+
+
+def time_series_lines(frame: pd.DataFrame, *, title: str, y_title: str = ""):
+    """Interactive line chart for candidate diagnostics such as exposure or regime tape."""
+    _require_plotly()
+    clean = frame.copy()
+    fig = go.Figure()
+    for column in clean.columns:
+        series = pd.Series(clean[column]).dropna().astype(float)
+        if series.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=series.index,
+                y=series.values,
+                mode="lines",
+                name=str(column),
+                hovertemplate="%{x}<br>%{y:.3f}<extra>%{fullData.name}</extra>",
+            )
+        )
+    fig.update_layout(
+        title=title,
+        template=_DARK_TEMPLATE,
+        height=500,
+        margin=dict(l=10, r=10, t=55, b=35),
+        xaxis_title="Date",
+        yaxis_title=y_title,
+        hovermode="x unified",
+    )
+    return fig
+
+
+def factor_ic_scatter(frame: pd.DataFrame, *, title: str = "Factor IC reliability"):
+    """Interactive factor-health map: IC IR versus coverage, sized by weight."""
+    _require_plotly()
+    data = frame.copy()
+    if data.index.name or "factor" not in data.columns:
+        data = data.reset_index().rename(columns={data.index.name or "index": "factor"})
+    for column in ["ic_ir", "coverage", "weight", "mean_ic", "hit_rate", "observations"]:
+        if column in data.columns:
+            data[column] = pd.to_numeric(data[column], errors="coerce")
+    if "ic_ir" not in data.columns or "coverage" not in data.columns:
+        raise ValueError("factor health frame is missing ic_ir or coverage")
+    if "weight" not in data.columns:
+        data["weight"] = 1.0
+    hover = [column for column in ["factor", "stage", "pm_state", "mean_ic", "hit_rate", "observations", "weight"] if column in data.columns]
+    fig = px.scatter(
+        data,
+        x="coverage",
+        y="ic_ir",
+        color="pm_state" if "pm_state" in data.columns else "stage" if "stage" in data.columns else None,
+        size=data["weight"].abs().fillna(0.0).clip(lower=0.01),
+        text="factor" if "factor" in data.columns else None,
+        hover_data=hover,
+        title=title,
+        template=_DARK_TEMPLATE,
+        color_discrete_sequence=_COLOR_SEQUENCE,
+    )
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.45)")
+    fig.update_traces(textposition="top center")
+    fig.update_layout(
+        height=620,
+        margin=dict(l=10, r=10, t=55, b=40),
+        xaxis_title="Coverage",
+        yaxis_title="IC information ratio",
+        legend_title_text="PM state",
+    )
+    return fig
+
+
+def strategy_shadow_mix(coverage: pd.DataFrame):
+    """Interactive stacked bar for proven versus shadow factor mix by strategy."""
+    _require_plotly()
+    cols = [column for column in ["proven_factors", "shadow_factors"] if column in coverage.columns]
+    if not cols:
+        raise ValueError("coverage frame is missing proven/shadow factor counts")
+    frame = coverage.copy().reset_index().rename(columns={coverage.index.name or "index": "strategy_id"})
+    id_col = "strategy_id" if "strategy_id" in frame.columns else frame.columns[0]
+    long = frame.melt(
+        id_vars=[id_col],
+        value_vars=cols,
+        var_name="factor_type",
+        value_name="count",
+    )
+    fig = px.bar(
+        long,
+        x=id_col,
+        y="count",
+        color="factor_type",
+        title="Strategy factor maturity mix",
+        template=_DARK_TEMPLATE,
+        color_discrete_map={"proven_factors": "#2ecc71", "shadow_factors": "#f1c40f"},
+    )
+    fig.update_layout(
+        height=max(450, 20 * frame[id_col].nunique() + 160),
+        margin=dict(l=10, r=10, t=55, b=120),
+        xaxis_title="Strategy",
+        yaxis_title="Factor count",
+        legend_title_text="Factor type",
     )
     return fig
 
