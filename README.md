@@ -47,10 +47,16 @@ Svyable is **paper-operational research infrastructure**. It is not yet a live-c
 
 ```bash
 uv venv .venv --python 3.14
-uv pip install --python .venv/bin/python -r requirements.txt   # installs -e .[all,dev]
+uv pip install --python .venv/bin/python -r requirements.txt   # installs offline research + GUI + dev extras
 ```
 
-For a byte-for-byte reproducible environment, install from the lockfile:
+`requirements.txt` intentionally matches the offline CI and Streamlit/agent PM workflow. Live broker SDK connectivity is opt-in:
+
+```bash
+uv pip install --python .venv/bin/python -e .[broker]
+```
+
+For a byte-for-byte reproducible environment, install from the lockfile after regenerating it for the current optional-extra policy:
 
 ```bash
 uv pip install --python .venv/bin/python -r requirements.lock
@@ -64,7 +70,7 @@ Optional groups are declared in `engine/pyproject.toml`:
 | `ml` | scikit-learn ML sleeve |
 | `hrp` | SciPy-backed HRP / clustering support |
 | `gui` | Streamlit, Matplotlib, Plotly, and watchdog for interactive PM review |
-| `broker` | Tastytrade SDK and `.env` loading |
+| `broker` | Tastytrade SDK live-broker adapter |
 | `dev` | pytest |
 | `all` | data + ml + hrp + gui + broker |
 
