@@ -5,12 +5,12 @@ Single-page validation briefing: what strategy, what risk state, what regime, wh
 ## 1 · Provenance & reproducibility contract
 
 - strategy: `svyable_nasdaq_lo` v`0.3.0`
-- weights_hash: `c132cbad488181078e704c64`  ·  config_hash: `052a518c0c903d14`
+- weights_hash: `6eb1d763dc7c30303384920f`  ·  config_hash: `052a518c0c903d14`
 - provider: `SyntheticProvider(n_assets=40, n_days=600, seed=3)`
 - config: `nasdaq_lo_config(min_adv=0, min_price=0, ml_enabled=False, seats_base=15, seats_min=10, seats_max=20)`
 - as-of (synthetic) date: `2020-04-17`
-- positions: `11`  ·  gross book / total weight: `0.81709000`
-- factor universe: `99` factors registered (see §7)
+- positions: `11`  ·  gross book / total weight: `0.83991659`
+- factor universe: `105` factors registered (see §7)
 
 > Not a live-capital recommendation. This is the deterministic CI behaviour contract for the pinned synthetic provider/configuration; the weights_hash is the hard regression gate.
 
@@ -20,28 +20,28 @@ Ticker = deterministic illustrative alias mapped from the synthetic universe (`S
 
 | Rank | Ticker | Synthetic ID | Weight | Weight % |
 | ---: | --- | --- | ---: | ---: |
-| 1 | PEP | SYN012 | 0.12256350 | 12.2564% |
-| 2 | INTC | SYN032 | 0.12256350 | 12.2564% |
-| 3 | REGN | SYN036 | 0.12256350 | 12.2564% |
-| 4 | QCOM | SYN015 | 0.11264141 | 11.2641% |
-| 5 | KLAC | SYN037 | 0.06968374 | 6.9684% |
-| 6 | ISRG | SYN024 | 0.05783581 | 5.7836% |
-| 7 | TSLA | SYN008 | 0.05356175 | 5.3562% |
-| 8 | ADI | SYN027 | 0.04935727 | 4.9357% |
-| 9 | ADBE | SYN013 | 0.04494853 | 4.4949% |
-| 10 | GOOG | SYN005 | 0.03634857 | 3.6349% |
-| 11 | VRTX | SYN026 | 0.02502242 | 2.5022% |
+| 1 | PEP | SYN012 | 0.12598749 | 12.5987% |
+| 2 | INTC | SYN032 | 0.12598749 | 12.5987% |
+| 3 | REGN | SYN036 | 0.12598749 | 12.5987% |
+| 4 | QCOM | SYN015 | 0.11814608 | 11.8146% |
+| 5 | KLAC | SYN037 | 0.07366096 | 7.3661% |
+| 6 | ISRG | SYN024 | 0.06353006 | 6.3530% |
+| 7 | ADI | SYN027 | 0.05655491 | 5.6555% |
+| 8 | TSLA | SYN008 | 0.05570443 | 5.5704% |
+| 9 | ADBE | SYN013 | 0.04512982 | 4.5130% |
+| 10 | GOOG | SYN005 | 0.03278103 | 3.2781% |
+| 11 | VRTX | SYN026 | 0.01644683 | 1.6447% |
 
 ## 3 · Risk posture (today)
 
 | Control | Value | Setting |
 | --- | ---: | --- |
-| Gross book (leverage budget) | 0.817 | cap 1.500 / floor 0.400 |
-| Realized vol (EWMA, ann.) | 19.61% | target 18.00% · stressed 12.00% → regime: stressed |
-| Vol-overlay multiplier | 0.901 | clip (0.5, 1.25) on 63d vol |
+| Gross book (leverage budget) | 0.840 | cap 1.500 / floor 0.400 |
+| Realized vol (EWMA, ann.) | 19.24% | target 18.00% · stressed 12.00% → regime: stressed |
+| Vol-overlay multiplier | 0.909 | clip (0.5, 1.25) on 63d vol |
 | Regime throttle | 1.000 | risk-off floor 0.450 |
 | Circuit breaker | armed (clear) | trip 10.00% dd × 1.500 → lev 0.000 |
-| Seats live / turnover | 11 / 4.60% | no-trade band 4.00% |
+| Seats live / turnover | 11 / 8.82% | no-trade band 4.00% |
 
 ## 4 · Regime stack (causal turbulence / breadth / panic)
 
@@ -91,7 +91,7 @@ Sleeves are meta-learned by trailing information coefficient; an untrusted (shad
 
 | Sleeve | Live wt | IC-IR | Hit | mean-IC | Horizons | Stress prior | Trust |
 | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |
-| momentum | 0.7156 | 1.017 | 82.54% | 0.104 | 21/63 | -0.60 | proven |
+| momentum | 0.7155 | 1.002 | 80.95% | 0.101 | 21/63 | -0.60 | proven |
 | defensive | 0.0948 | -0.079 | 58.73% | -0.008 | 21 | 0.80 | proven |
 | meanrev | 0.0948 | 0.119 | 66.67% | 0.016 | 5/21 | 0.40 | proven |
 | micro | 0.0948 | -0.105 | 41.27% | -0.013 | 5/21 | 0.20 | proven |
@@ -99,27 +99,27 @@ Sleeves are meta-learned by trailing information coefficient; an untrusted (shad
 
 ## 7 · Factor stack (what is switched on)
 
-- **99** factors active — **43 proven** (guaranteed floor 1.20%) + **56 shadow** (no floor; earn weight via IC or decay out).
+- **105** factors active — **43 proven** (guaranteed floor 1.20%) + **62 shadow** (no floor; earn weight via IC or decay out).
 
 | Sleeve | Proven | Shadow | Total |
 | --- | ---: | ---: | ---: |
 | defensive | 17 | 7 | 24 |
-| liquidity | 0 | 1 | 1 |
+| liquidity | 0 | 2 | 2 |
 | meanrev | 7 | 8 | 15 |
 | micro | 0 | 8 | 8 |
-| momentum | 19 | 28 | 47 |
-| resilience | 0 | 4 | 4 |
+| momentum | 19 | 32 | 51 |
+| resilience | 0 | 5 | 5 |
 
 **Top 8 factors driving the dominant `momentum` sleeve today:**
 
-- `fip_momentum` (proven, wt 0.081) — 12-1 momentum weighted by information continuity.
-- `vol_scaled_momentum` (shadow, wt 0.076) — Classic skipped momentum divided by trailing realized volati…
-- `momentum_divergence` (shadow, wt 0.072) — Cumulative beta-driven share of trailing 12-1 momentum.
-- `mom_12_1` (proven, wt 0.071) — Q23 legacy implementation
-- `momentum_quality` (proven, wt 0.058) — Q23 legacy implementation
-- `multi_horizon_trend` (proven, wt 0.053) — Risk-adjusted 1/3/6/12-month trend rewarded for sign agreeme…
-- `capm_alpha` (proven, wt 0.040) — Q23 legacy implementation
-- `trend_consistency` (proven, wt 0.039) — Q23 legacy implementation
+- `fip_momentum` (proven, wt 0.080) — 12-1 momentum weighted by information continuity.
+- `vol_scaled_momentum` (shadow, wt 0.074) — Classic skipped momentum divided by trailing realized volati…
+- `mom_12_1` (proven, wt 0.070) — Q23 legacy implementation
+- `momentum_divergence` (shadow, wt 0.070) — Cumulative beta-driven share of trailing 12-1 momentum.
+- `momentum_quality` (proven, wt 0.056) — Q23 legacy implementation
+- `multi_horizon_trend` (proven, wt 0.051) — Risk-adjusted 1/3/6/12-month trend rewarded for sign agreeme…
+- `capm_alpha` (proven, wt 0.039) — Q23 legacy implementation
+- `momentum_persistence` (proven, wt 0.039) — Q23 legacy implementation
 
 ## 8 · Construction & universe
 
