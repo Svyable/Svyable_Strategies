@@ -18,6 +18,8 @@ concurrency:
 permissions:
   contents: read
 
+
+
 env:
   PYTHONHASHSEED: "0"
   OMP_NUM_THREADS: "1"
@@ -63,6 +65,16 @@ jobs:
 
       - name: Golden weights and causality regression
         run: python tests/test_regression.py
+
+      - name: Upload golden weights snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-weights-snapshot
+          path: |
+            engine/tests/golden_weights_human.md
+            engine/tests/golden_weights.csv
+          if-no-files-found: ignore
 
       - name: Turbulence and regime regression
         run: python tests/test_turbulence.py
