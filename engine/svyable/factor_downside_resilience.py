@@ -22,19 +22,45 @@ def _residual(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
 
 
 def _market_down_mask(panel: Panel, window: int = 63) -> pd.Series:
-    threshold = -panel.market_ret.rolling(window, min_periods=max(20, window // 2)).std().fillna(0.0) * 0.50
-    return panel.market_ret.lt(threshold)
+    """Causal weak-market mask with a sparse-stress fallback.
+
+    The primary definition is a meaningful broad-market down day: market return
+    below -0.5 trailing-vol. Calm synthetic/regime fixtures can go long stretches
+    without enough such days for rolling conditional factors. In that sparse
+    case, fall back to ordinary negative market-return days so the factor remains
+    an inspectable downside-conditioning signal rather than degenerating to all
+    NaN. Live stressed periods still use the stricter threshold automatically.
+    """
+    vol = panel.market_ret.rolling(window, min_periods=max(20, window // 2)).std().fillna(0.0)
+    stress = panel.market_ret.lt(-0.50 * vol)
+    ordinary_down = panel.market_ret.lt(0.0)
+    min_stress_events = max(3, window // 10)
+    enough_stress = stress.astype(float).rolling(window, min_periods=1).sum().ge(min_stress_events)
+    return stress.where(enough_stress, ordinary_down).fillna(False)
 
 
 def down_market_residual_strength(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
-    """Residual strength specifically on broad-market down days."""
+    """Residual strength on weak broad-market days.
+
+    A name scores well when its beta-stripped return remains positive on days
+    when the internal market proxy is weak. The statistic is normalized by its
+    residual volatility and scaled by the square-root of observed weak-market
+    days, with a modest minimum event count to avoid requiring crisis-like data in
+    normal synthetic smoke tests.
+    """
     resid = _residual(panel, cfg)
-    mask = _market_down_mask(panel).reindex(resid.index).fillna(False)
+    window = 63
+    min_down_days = max(5, window // 8)
+    mask = _market_down_mask(panel, window).reindex(resid.index).fillna(False)
     down_resid = resid.where(mask, 0.0)
-    count = mask.astype(float).rolling(63, min_periods=20).sum()
-    strength = down_resid.rolling(63, min_periods=20).sum().div(count.replace(0.0, np.nan), axis=0)
-    resid_vol = resid.rolling(63, min_periods=32).std()
-    return (strength.div(resid_vol + EPS, axis=0) * np.sqrt(count.clip(lower=1.0))).clip(-6.0, 6.0)
+    count = mask.astype(float).rolling(window, min_periods=min_down_days).sum()
+    strength = down_resid.rolling(window, min_periods=min_down_days).sum().div(
+        count.replace(0.0, np.nan),
+        axis=0,
+    )
+    resid_vol = resid.rolling(window, min_periods=max(20, window // 2)).std()
+    signal = strength.div(resid_vol + EPS, axis=0) * np.sqrt(count.clip(lower=1.0))
+    return signal.clip(-6.0, 6.0)
 
 
 def downside_capture_inverse(panel: Panel, cfg: SvyableConfig) -> pd.DataFrame:
@@ -90,7 +116,7 @@ def volatility_cooldown_momentum(panel: Panel, cfg: SvyableConfig) -> pd.DataFra
 
 
 def register_downside_resilience() -> None:
-    register_factor("down_market_residual_strength", "resilience", down_market_residual_strength, proven=False, lineage="down-market residual strength", description="Residual strength measured specifically on broad-market down days.")
+    register_factor("down_market_residual_strength", "resilience", down_market_residual_strength, proven=False, lineage="down-market residual strength", description="Residual strength measured specifically on weak broad-market days.")
     register_factor("downside_capture_inverse", "resilience", downside_capture_inverse, proven=False, lineage="inverse downside capture", description="Low or positive capture on negative market-return days.")
     register_factor("panic_reclaim_strength", "resilience", panic_reclaim_strength, proven=False, lineage="panic reclaim strength", description="Fast recovery after broad market selloffs with strong close location.")
     register_factor("drawdown_floor_stability", "resilience", drawdown_floor_stability, proven=False, lineage="drawdown floor stability", description="Shallow and stable medium-term drawdowns.")
