@@ -80,7 +80,7 @@ def overlap_matrix(latest_weights: dict[str, pd.Series]) -> pd.DataFrame:
     return table.astype(float)
 
 
-def render_position_stack(weights_history: pd.DataFrame) -> None:
+def render_position_stack(weights_history: pd.DataFrame, *, key_prefix: str = "position_stack") -> None:
     matrix = weights_matrix(weights_history)
     if matrix.empty:
         st.info("No weights history yet. Run `svyable daily` to populate `weights_history.csv`.")
@@ -92,8 +92,15 @@ def render_position_stack(weights_history: pd.DataFrame) -> None:
         "rows are names the model trades in and out of."
     )
     controls = st.columns(2)
-    top_n = controls[0].slider("Names to show", 10, 80, 40, step=5)
-    tail_days = controls[1].slider("Lookback (days)", 60, min(756, len(matrix)), min(252, len(matrix)), step=21)
+    top_n = controls[0].slider("Names to show", 10, 80, 40, step=5, key=f"{key_prefix}_top_n")
+    tail_days = controls[1].slider(
+        "Lookback (days)",
+        60,
+        min(756, len(matrix)),
+        min(252, len(matrix)),
+        step=21,
+        key=f"{key_prefix}_tail_days",
+    )
 
     trimmed = top_names_matrix(matrix, top_n=top_n, tail_days=tail_days)
     if interactive.available():
