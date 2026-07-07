@@ -43,9 +43,15 @@ def configured_output_root(settings: TastySettings) -> str:
     return str(engine_root / ("outputs" if settings.is_test else "outputs-production"))
 
 
+def normalize_environment_choice(choice: str) -> str:
+    """Return a valid broker environment choice, defaulting safely to sandbox."""
+    value = str(choice or "").upper()
+    return value if value in BROKER_ENVIRONMENT_OPTIONS else "SANDBOX"
+
+
 def is_test_choice(choice: str) -> bool:
     """Translate the Streamlit broker environment choice into SDK test mode."""
-    return str(choice).upper() != "PRODUCTION"
+    return normalize_environment_choice(choice) != "PRODUCTION"
 
 
 def environment_choice_for_settings(settings: TastySettings) -> str:
@@ -70,7 +76,8 @@ def selected_runtime_settings() -> TastySettings:
     if BROKER_ENVIRONMENT_SESSION_KEY not in st.session_state:
         st.session_state[BROKER_ENVIRONMENT_SESSION_KEY] = env_default
 
-    prior = st.session_state[BROKER_ENVIRONMENT_SESSION_KEY]
+    prior = normalize_environment_choice(st.session_state[BROKER_ENVIRONMENT_SESSION_KEY])
+    st.session_state[BROKER_ENVIRONMENT_SESSION_KEY] = prior
     choice = st.sidebar.radio(
         "Broker environment",
         BROKER_ENVIRONMENT_OPTIONS,
