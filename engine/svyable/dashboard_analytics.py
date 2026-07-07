@@ -246,6 +246,7 @@ def render_analytics(service: DashboardService) -> None:
             value=max(default_window, 20),
             step=5,
             help="Lookback used for rolling Sharpe, annualized volatility, and hit rate.",
+            key="analytics_rolling_window",
         )
         rolling = _rolling_frame(returns, window)
         if not rolling.empty:
@@ -277,7 +278,7 @@ def render_analytics(service: DashboardService) -> None:
         _render_weights_section(snapshot["weights_history"])
 
     with stack_tab:
-        render_position_stack(snapshot["weights_history"])
+        render_position_stack(snapshot["weights_history"], key_prefix="analytics_position_stack")
 
     with factor_tab:
         render_figure(charts.return_distribution_chart(returns))
@@ -299,6 +300,6 @@ def render_analytics(service: DashboardService) -> None:
         tail = summary.get("tail_ratio_95_5")
         if tail is not None:
             st.caption(
-                f"Tail ratio (|p95| / |p05|): **{tail}** — values > 1 mean fatter right "
+                f"Tail ratio (|p95| / p05|): **{tail}** — values > 1 mean fatter right "
                 "(gain) tail than left (loss) tail."
             )
