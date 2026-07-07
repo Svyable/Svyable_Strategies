@@ -53,6 +53,14 @@ _FIELD_SETS = {"Candle": CANDLE_FIELDS, "Quote": QUOTE_FIELDS,
 DEFAULT_VERSION = "0.1-svyable/0.1"
 
 
+def _chmod_owner_read_write(path: Path) -> None:
+    """Best-effort 0600 permissions for local files that may contain tokens."""
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Protocol core (spec 1.0.2) — pure, socket-agnostic helpers.
 # ---------------------------------------------------------------------------
@@ -196,6 +204,7 @@ def fetch_quote_token(tt_client, token_cache: str | Path | None) -> tuple[str, s
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(
             {"token": token, "url": url, "expires_at": time.time() + 23 * 3600}))
+        _chmod_owner_read_write(cache)
     return token, url
 
 
