@@ -38,6 +38,14 @@ def mask(value: str) -> str:
     return f"{value[:4]}…{value[-4:]} ({len(value)} chars)"
 
 
+def _chmod_owner_read_write(path: Path) -> None:
+    """Best-effort 0600 permissions for local files that may contain tokens."""
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
 def build_authorize_url(settings: TastySettings, state: str, scope: str = "") -> str:
     params = {
         "client_id": settings.client_id,
@@ -142,6 +150,7 @@ def discover_account_number(settings: TastySettings, access_token: str) -> str |
 def update_env_file(env_path: Path, updates: dict[str, str]) -> None:
     """Idempotently set KEY=value lines in an .env, preserving everything else."""
     env_path = Path(env_path)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     lines = env_path.read_text().splitlines() if env_path.exists() else []
     remaining = dict(updates)
     out: list[str] = []
@@ -154,6 +163,7 @@ def update_env_file(env_path: Path, updates: dict[str, str]) -> None:
     for key, value in remaining.items():
         out.append(f"{key}={value}")
     env_path.write_text("\n".join(out) + "\n")
+    _chmod_owner_read_write(env_path)
 
 
 def authorize(env_path: Path, *, open_browser: bool = True, scope: str = "") -> dict:
