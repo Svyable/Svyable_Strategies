@@ -230,6 +230,19 @@ def cmd_rebalance(args) -> int:
     from svyable.brokers import LocalPaperBroker
     from svyable.rebalancer import plan_orders, execute_plan, reconcile
 
+    if args.broker == "tasty" and args.execute:
+        print(
+            "Tasty strategy execution via `svyable rebalance --broker tasty --execute` "
+            "is disabled; use Streamlit Portfolio Ops for guarded submission.",
+            file=sys.stderr,
+        )
+        print(
+            "Re-run without --execute to generate an operator plan, or use "
+            "`svyable tasty dry-run` for a single-order broker preflight.",
+            file=sys.stderr,
+        )
+        return 2
+
     cfg = nasdaq_lo_config()
     strat_dir = Path(args.out) / cfg.strategy_id
 
@@ -644,7 +657,7 @@ def main(argv=None) -> int:
     rb.add_argument("--equity", type=float, default=100_000.0,
                     help="starting cash for a fresh local paper account")
     rb.add_argument("--execute", action="store_true",
-                    help="run broker-side execution path (default: dry run)")
+                    help="execute paper orders only; Tasty strategy submit uses Streamlit Portfolio Ops")
     rb.add_argument("--confirmation", default="",
                     help="configured account number required for production tasty execution")
     rb.add_argument("--continue-on-error", action="store_true",
