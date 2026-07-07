@@ -128,7 +128,7 @@ def render_candidate_analytics(
         if weights_history.empty:
             st.caption("No `weights_history.csv` for this candidate yet.")
         else:
-            render_position_stack(weights_history)
+            render_position_stack(weights_history, key_prefix=f"candidate_position_stack_{candidate}")
 
     with perf_tab:
         if returns.empty:
