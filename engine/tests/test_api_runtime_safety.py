@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from svyable.cli import main
 from svyable.dxlink import fetch_quote_token
 from svyable.oauth import update_env_file
 
@@ -47,6 +48,20 @@ def test_dxlink_quote_token_cache_is_owner_read_write_only(tmp_path):
     assert _mode(cache) == 0o600
 
 
+def test_cli_tasty_rebalance_execute_is_guarded_before_side_effects(tmp_path, capsys):
+    rc = main([
+        "--out", str(tmp_path / "outputs"),
+        "rebalance",
+        "--broker", "tasty",
+        "--execute",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "Tasty strategy execution" in captured.err
+    assert "Streamlit Portfolio Ops" in captured.err
+
+
 if __name__ == "__main__":
     import tempfile
 
@@ -54,4 +69,10 @@ if __name__ == "__main__":
         root = Path(td)
         test_oauth_env_file_is_owner_read_write_only(root)
         test_dxlink_quote_token_cache_is_owner_read_write_only(root)
+        class _Capture:
+            out = ""
+            err = ""
+            def readouterr(self):
+                return self
+        test_cli_tasty_rebalance_execute_is_guarded_before_side_effects(root, _Capture())
     print("API RUNTIME SAFETY TESTS PASSED")
