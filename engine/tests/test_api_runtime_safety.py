@@ -69,10 +69,4 @@ if __name__ == "__main__":
         root = Path(td)
         test_oauth_env_file_is_owner_read_write_only(root)
         test_dxlink_quote_token_cache_is_owner_read_write_only(root)
-        class _Capture:
-            out = ""
-            err = ""
-            def readouterr(self):
-                return self
-        test_cli_tasty_rebalance_execute_is_guarded_before_side_effects(root, _Capture())
     print("API RUNTIME SAFETY TESTS PASSED")
