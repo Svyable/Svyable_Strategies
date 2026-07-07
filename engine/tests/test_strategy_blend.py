@@ -14,6 +14,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from svyable.agent_review_chain import run_review_chain
 from svyable.providers import SyntheticProvider
 from svyable.strategy_activation import activate_latest_selection
 from svyable.strategy_blend import (
@@ -47,6 +48,54 @@ def _permissive(**overrides) -> SelectionPolicy:
     )
     defaults.update(overrides)
     return SelectionPolicy(**defaults)
+
+
+def _write_agent_review_context(root: Path, board: pd.DataFrame, candidate_id: str) -> None:
+    """Materialize a synthetic PASS review context for blend activation tests.
+
+    Agent activation now requires a guard/chain/receipt/audit PASS for every
+    candidate, including chimera blends. The regression should exercise that
+    same review rail instead of bypassing it for blends.
+    """
+    selection = root / "strategy_selection"
+    selection.mkdir(parents=True, exist_ok=True)
+    first = board.iloc[0]
+    candidates = [
+        {"candidate_id": str(value)}
+        for value in board["candidate_id"].astype(str).tolist()
+    ]
+    context = {
+        "as_of": str(first["as_of"]),
+        "candidate_set_hash": str(first["candidate_set_hash"]),
+        "rails": {
+            "allowed_candidate_ids": [item["candidate_id"] for item in candidates],
+            "hard_rules": ["Choose exactly one allowed candidate_id."],
+        },
+        "decision_readiness": {"status": "PASS", "issues": []},
+        "focus_candidate_artifact_health": {
+            "status": "ok",
+            "inputs_stale": False,
+            "missing_execution_columns": [],
+        },
+        "candidates": candidates,
+        "summary": {
+            "candidate_count": int(len(candidates)),
+            "eligible_count": int(board["eligible"].astype(bool).sum()),
+            "top_eligible_candidate": candidate_id,
+            "planned_candidate": candidate_id,
+            "mode": "agent",
+        },
+        "meta_decision_trace": {
+            "visible_regime": {},
+            "selected_score_breakdown": {},
+            "selected_decision_nodes": [],
+        },
+        "selection_explanation": {
+            "summary": "Synthetic chimera blend activation review fixture."
+        },
+    }
+    (selection / "latest_agent_context.json").write_text(json.dumps(context))
+    (selection / "latest_agent_pm_memo.md").write_text("# Synthetic blend review memo\n")
 
 
 def test_preset_blends_are_valid_and_complete():
@@ -214,6 +263,16 @@ def test_agent_selects_blend_and_activation_is_canonical():
             "confidence": 0.7,
             "reason": "Blend diversifies while netting opposing trades.",
         }))
+        try:
+            activate_latest_selection(root)
+            raise AssertionError("unreviewed chimera decision activated")
+        except RuntimeError as exc:
+            assert "review" in str(exc).lower() or "guard" in str(exc).lower()
+
+        _write_agent_review_context(root, selection.board, "chimera_agent_mix")
+        chain = run_review_chain(root)
+        assert chain["status"] == "PASS"
+
         activation = activate_latest_selection(root)
         assert activation["strategy_id"] == "chimera_agent_mix"
 
@@ -305,6 +364,9 @@ def test_service_custom_blend_lifecycle_and_pending_proposal():
         regime = service.latest_regime()
         assert not regime.empty and "throttle" in regime.columns
 
+        _write_agent_review_context(root, selection.board, "chimera_agent_mix")
+        chain = run_review_chain(root)
+        assert chain["status"] == "PASS"
         activate_latest_selection(root)
         assert service.pending_agent_decision() == {}, (
             "an activated proposal must no longer show as pending"
