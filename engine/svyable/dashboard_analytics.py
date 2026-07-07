@@ -300,6 +300,6 @@ def render_analytics(service: DashboardService) -> None:
         tail = summary.get("tail_ratio_95_5")
         if tail is not None:
             st.caption(
-                f"Tail ratio (|p95| / p05|): **{tail}** — values > 1 mean fatter right "
+                f"Tail ratio (|p95| / |p05|): **{tail}** — values > 1 mean fatter right "
                 "(gain) tail than left (loss) tail."
             )
