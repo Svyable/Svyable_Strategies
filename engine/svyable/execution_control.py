@@ -307,7 +307,7 @@ class ExecutionControlMixin:
             raise RuntimeError(
                 "Production cancellation requires the configured account number."
             )
-        result = self.broker.cancel_order(int(order_id))
+        result = self.broker.cancel_order(int(order_id), confirmation=confirmation)
         ledger = Ledger(self.ledger_path)
         try:
             ledger.record_event(

@@ -77,6 +77,9 @@ jobs:
       - name: Compile modules
         run: python -m compileall -q svyable
 
+      - name: Panel cache regression
+        run: python tests/test_panel_cache.py
+
       - name: Golden weights and causality regression
         run: python tests/test_regression.py
 
@@ -118,6 +121,12 @@ jobs:
 
       - name: Strategy selection regression
         run: python tests/test_strategy_selection.py
+
+      - name: Agent PM review rail regressions
+        run: |
+          python tests/test_agent_decision_guard.py
+          python tests/test_agent_review_receipt.py
+          python tests/test_agent_review_audit.py
 
       - name: Institutional alpha regression
         run: python tests/test_institutional_alpha.py

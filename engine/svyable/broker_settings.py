@@ -1,8 +1,9 @@
 """Runtime settings for Tastytrade connectivity and dashboard safety.
 
 Secrets are loaded from the environment (optionally via ``engine/.env``). The
-new ``TASTY_*`` names are canonical; legacy ``TT_*`` aliases remain accepted so
-existing local automation does not break during migration.
+``TASTY_*`` names are canonical. A small set of legacy ``TT_*`` aliases remains
+accepted for OAuth/account migration only; username/password session auth has
+been removed from all runtime transports.
 """
 
 from __future__ import annotations
@@ -48,10 +49,6 @@ class TastySettings:
     # not by the daily refresh-token grant — so they are never required credentials.
     client_id: str = ""
     redirect_uri: str = ""
-    # Optional fallback for sandbox/session-token transport paths. The SDK broker
-    # and production execution path use OAuth refresh-token credentials instead.
-    username: str = ""
-    password: str = ""
 
     @property
     def environment(self) -> str:
@@ -79,10 +76,6 @@ class TastySettings:
     def has_oauth_refresh_credentials(self) -> bool:
         return bool(self.client_secret and self.refresh_token)
 
-    @property
-    def has_session_credentials(self) -> bool:
-        return bool(self.username and self.password)
-
     @classmethod
     def from_env(cls, *, require_credentials: bool = True) -> "TastySettings":
         load_dotenv()
@@ -92,8 +85,6 @@ class TastySettings:
         account_number = _first_env("TASTY_ACCOUNT_NUMBER", "TT_ACCOUNT")
         client_id = _first_env("TASTY_CLIENT_ID", "TT_CLIENT_ID")
         redirect_uri = _first_env("TASTY_REDIRECT_URI", "TT_REDIRECT_URI")
-        username = _first_env("TASTY_USERNAME", "TT_USERNAME")
-        password = _first_env("TASTY_PASSWORD", "TT_PASSWORD")
 
         explicit_test = os.getenv("TASTY_IS_TEST")
         if explicit_test is None:
@@ -139,6 +130,4 @@ class TastySettings:
             slippage_critical_bps=critical_bps,
             client_id=client_id,
             redirect_uri=redirect_uri,
-            username=username,
-            password=password,
         )

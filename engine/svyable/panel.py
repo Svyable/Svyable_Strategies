@@ -25,8 +25,12 @@ class Panel:
     meta: dict = field(default_factory=dict)
 
     # ---- derived (cached) ----
-    _ret: Optional[pd.DataFrame] = None
-    _liq: Optional[pd.DataFrame] = None
+    _ret: Optional[pd.DataFrame] = field(default=None, init=False, repr=False)
+    _liq_cache: dict[tuple[float, float, int], pd.DataFrame] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         frames = [self.open, self.high, self.low, self.close, self.volume]
@@ -54,12 +58,18 @@ class Panel:
 
     def liquidity_mask(self, min_adv: float = 25e6, min_price: float = 5.0,
                        adv_win: int = 21) -> pd.DataFrame:
-        """Computed tradability mask (1.0/0.0). Replaces any vendor is_liquid flag."""
-        if self._liq is None:
+        """Computed tradability mask (1.0/0.0). Replaces any vendor is_liquid flag.
+
+        The mask is configuration-dependent. Cache by the exact liquidity policy
+        so strategy/frontier evaluations with different ADV/price windows cannot
+        accidentally reuse the first mask computed on this Panel.
+        """
+        key = (float(min_adv), float(min_price), int(adv_win))
+        if key not in self._liq_cache:
             ok = (self.adv(adv_win) >= min_adv) & (self.close >= min_price)
             ok &= self.volume.notna() & (self.volume > 0)
-            self._liq = ok.astype(float)
-        return self._liq
+            self._liq_cache[key] = ok.astype(float)
+        return self._liq_cache[key]
 
     @property
     def market_ret(self) -> pd.Series:

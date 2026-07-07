@@ -36,14 +36,82 @@ def latest_board_dir(output_root: str | Path) -> Path:
     return candidates[-1]
 
 
-def _read_state(output_root: str | Path) -> dict[str, Any]:
-    path = state_path(output_root)
+def _read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
     except json.JSONDecodeError:
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _read_state(output_root: str | Path) -> dict[str, Any]:
+    return _read_json_file(state_path(output_root))
+
+
+def _require_agent_review_pass(
+    board: pd.DataFrame,
+    output_root: str | Path,
+) -> dict[str, Any]:
+    """Require the non-trading review chain to still validate the live decision.
+
+    The Streamlit surface already exposes activation readiness, but activation is
+    also reachable from CLI/direct Python. Recompute the guard and audit here so a
+    stale PASS file cannot be replayed after ``agent_decision.json`` changes.
+    """
+    from svyable.agent_decision_guard import validate_agent_decision
+    from svyable.agent_review_audit import audit_review_receipt
+
+    root = Path(output_root)
+    selection_root = root / "strategy_selection"
+    board_as_of = str(board.iloc[0].get("as_of", ""))
+    board_hash = str(board.iloc[0].get("candidate_set_hash", ""))
+    guard = validate_agent_decision(root)
+    chain = _read_json_file(selection_root / "latest_agent_review_chain.json")
+    receipt = _read_json_file(selection_root / "latest_agent_review_receipt.json")
+    audit = audit_review_receipt(root)
+
+    blockers: list[str] = []
+    if guard.get("status") != "PASS":
+        blockers.append("decision guard is not PASS")
+        blockers.extend(str(item) for item in guard.get("blockers", [])[:8])
+    if chain.get("status") != "PASS":
+        blockers.append("review chain is missing or not PASS")
+        blockers.extend(str(item) for item in chain.get("blockers", [])[:8])
+    if receipt.get("status") != "PASS":
+        blockers.append("review receipt is missing or not PASS")
+        blockers.extend(str(item) for item in receipt.get("blockers", [])[:8])
+    if audit.get("status") != "PASS":
+        blockers.append("review audit is not PASS")
+        blockers.extend(str(item) for item in audit.get("blockers", [])[:8])
+
+    if str(guard.get("as_of", "")) != board_as_of:
+        blockers.append("guard date does not match the latest board")
+    if str(guard.get("candidate_set_hash", "")) != board_hash:
+        blockers.append("guard hash does not match the latest board")
+    if receipt and str(receipt.get("as_of", "")) != board_as_of:
+        blockers.append("review receipt date does not match the latest board")
+    if receipt and str(receipt.get("candidate_set_hash", "")) != board_hash:
+        blockers.append("review receipt hash does not match the latest board")
+    if receipt and str(receipt.get("candidate_id", "")) != str(guard.get("candidate_id", "")):
+        blockers.append("review receipt candidate does not match the current guarded decision")
+    if audit and str(audit.get("candidate_set_hash", "")) != board_hash:
+        blockers.append("review audit hash does not match the latest board")
+
+    if blockers:
+        unique_blockers = list(dict.fromkeys(blockers))
+        raise RuntimeError(
+            "Agent activation review has not passed: "
+            + "; ".join(unique_blockers)
+        )
+
+    return {
+        "guard": guard,
+        "chain": chain,
+        "receipt": receipt,
+        "audit": audit,
+    }
 
 
 def _validated_agent_row(
@@ -60,12 +128,20 @@ def _validated_agent_row(
         raise RuntimeError("Agent decision date does not match the latest board.")
     if payload.get("candidate_set_hash") != candidate_hash:
         raise RuntimeError("Agent decision hash does not match the latest board.")
-    matches = board[board["candidate_id"] == str(payload.get("candidate_id", ""))]
+    candidate_id = str(payload.get("candidate_id", ""))
+    matches = board[board["candidate_id"] == candidate_id]
     if matches.empty:
         raise RuntimeError("Agent selected a candidate not present on the board.")
     row = matches.iloc[0]
     if not bool(row["eligible"]):
         raise RuntimeError("Agent selected an ineligible candidate.")
+
+    review = _require_agent_review_pass(board, output_root)
+    guarded_candidate = str((review.get("guard") or {}).get("candidate_id", ""))
+    if guarded_candidate != candidate_id:
+        raise RuntimeError("Reviewed decision candidate does not match the agent decision.")
+    receipt = review.get("receipt") or {}
+    payload["_decision_fingerprint"] = receipt.get("decision_fingerprint")
     return row, payload
 
 
@@ -152,11 +228,13 @@ def activate_latest_selection(output_root: str | Path) -> dict[str, Any]:
         source = "agent"
         reason = str(payload.get("reason", "Agent-selected eligible strategy."))[:1000]
         confidence = payload.get("confidence")
+        decision_fingerprint = payload.get("_decision_fingerprint")
     else:
         row, payload = _validated_planned_row(board_dir, board)
         source = str(payload.get("source", policy.mode))
         reason = str(payload.get("reason", "Validated planned selection."))[:1000]
         confidence = payload.get("agent_confidence")
+        decision_fingerprint = payload.get("decision_fingerprint")
 
     activation_path = board_dir / "activation.json"
     if activation_path.exists():
@@ -173,6 +251,7 @@ def activate_latest_selection(output_root: str | Path) -> dict[str, Any]:
             "source": source,
             "reason": reason,
             "agent_confidence": confidence,
+            "decision_fingerprint": decision_fingerprint,
             "mode": policy.mode,
         }
     )

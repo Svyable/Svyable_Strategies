@@ -71,21 +71,19 @@ def test_rest_client_uses_canonical_shared_oauth_settings(monkeypatch):
     assert client.env == "sandbox"
     assert client.base == settings.api_base
     assert settings.has_oauth_refresh_credentials
-    assert not settings.has_session_credentials
 
 
-def test_rest_client_uses_legacy_session_settings_without_direct_env_reads(monkeypatch):
+def test_rest_client_rejects_deprecated_username_password_session_settings(monkeypatch):
     monkeypatch.setenv("TT_USERNAME", "legacy-user")
     monkeypatch.setenv("TT_PASSWORD", "legacy-pass")
     monkeypatch.setenv("TT_ENV", "sandbox")
 
     settings = TastySettings.from_env(require_credentials=False)
-    client = tastytrade.TastytradeClient(settings=settings)
 
-    assert settings.username == "legacy-user"
-    assert settings.password == "legacy-pass"
-    assert client.auth_mode == "session"
-    assert client.env == "sandbox"
+    assert not hasattr(settings, "username")
+    assert not hasattr(settings, "password")
+    with pytest.raises(RuntimeError, match="TASTY_CLIENT_SECRET/TASTY_REFRESH_TOKEN"):
+        tastytrade.TastytradeClient(settings=settings)
 
 
 def test_rest_client_requires_transport_credentials():
@@ -93,8 +91,6 @@ def test_rest_client_requires_transport_credentials():
         client_secret="",
         refresh_token="",
         account_number="",
-        username="",
-        password="",
     )
 
     with pytest.raises(RuntimeError, match="TASTY_CLIENT_SECRET/TASTY_REFRESH_TOKEN"):
