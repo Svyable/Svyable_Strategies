@@ -409,7 +409,7 @@ def render_command_center(
     targets = _render_current_positions(service, broker_snapshot)
 
     st.divider()
-    plan = _render_proposed_transactions(service, settings)
+    _render_proposed_transactions(service, settings)
 
     st.divider()
     st.subheader("Readiness gates")
@@ -447,6 +447,7 @@ def render_command_center(
                     float(account.get("equity")) if account.get("equity") else None,
                 )
 
+    strategy_snapshot: dict | None = None
     with st.expander("Strategy, frontier, and run diagnostics", expanded=False):
         _render_run_health(ledger, output_root)
 
@@ -474,7 +475,8 @@ def render_command_center(
             else:
                 st.dataframe(warnings, use_container_width=True, hide_index=True)
 
-    strategy_snapshot = service.strategy_snapshot()
+    if strategy_snapshot is None:
+        strategy_snapshot = service.strategy_snapshot()
     report = strategy_snapshot.get("report") if isinstance(strategy_snapshot, dict) else ""
     if report:
         with st.expander("Morning report", expanded=False):
