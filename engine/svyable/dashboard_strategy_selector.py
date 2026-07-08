@@ -51,9 +51,15 @@ def _gate_status_label(status: object) -> str:
 def _candidate_label(row: pd.Series | dict[str, Any]) -> str:
     candidate_id = str(row.get("candidate_id", ""))
     action = str(row.get("action", ""))
-    family = str(row.get("family", ""))
+    strategy_id = str(row.get("strategy_id", ""))
+    name = str(row.get("name", ""))
+    net_alpha = _bps(row.get("net_expected_alpha_bps", row.get("expected_alpha_bps")))
     utility = _bps(row.get("utility_bps"))
-    return f"{candidate_id} · {action} · {family} · utility {utility}"
+    if candidate_id == "hold_current":
+        provenance = str(row.get("current_strategy_provenance") or strategy_id or "cash")
+        return f"hold_current · {provenance} · net alpha {net_alpha} · utility {utility}"
+    label_name = name if name and name != candidate_id else strategy_id
+    return f"{candidate_id} · {action} · {label_name} · net alpha {net_alpha} · utility {utility}"
 
 
 def _blocked_reasons(row: pd.Series) -> list[str]:
@@ -74,6 +80,114 @@ def _blocked_reasons(row: pd.Series) -> list[str]:
     except (TypeError, ValueError):
         pass
     return reasons
+
+
+def _strategy_name(service: StrategySelectionService, strategy_id: object) -> str:
+    sid = str(strategy_id or "cash")
+    if sid == "cash":
+        return "Cash / no active strategy"
+    try:
+        return str(service.strategy_details(sid).get("name") or sid)
+    except Exception:
+        return sid
+
+
+def _hold_row(board: pd.DataFrame) -> pd.Series | None:
+    if board.empty or "candidate_id" not in board.columns:
+        return None
+    matches = board[board["candidate_id"].astype(str) == "hold_current"]
+    return None if matches.empty else matches.iloc[0]
+
+
+def _render_hold_current_explanation(service: StrategySelectionService, board: pd.DataFrame) -> None:
+    hold = _hold_row(board)
+    if hold is None:
+        return
+
+    strategy_id = str(hold.get("strategy_id", "cash") or "cash")
+    strategy_name = _strategy_name(service, strategy_id)
+    position_source = str(hold.get("current_position_source", "canonical target"))
+    provenance = f"{strategy_id} — {strategy_name} · positions from {position_source}"
+
+    with st.container(border=True):
+        st.markdown("#### Current holdings provenance")
+        st.caption(
+            "`hold_current` means **do not trade**. It keeps the canonical target weights already on file; "
+            "the fields below show which strategy or blend created those holdings."
+        )
+        cols = st.columns(5)
+        cols[0].metric("Hold row", "hold_current")
+        cols[1].metric("Underlying strategy_id", strategy_id)
+        cols[2].metric("Strategy / blend name", strategy_name)
+        cols[3].metric("Position source", position_source)
+        cols[4].metric("Current holdings", f"{int(hold.get('positions', 0) or 0)} names")
+        st.caption(
+            f"Current strategy provenance: **{provenance}** · "
+            f"net alpha after estimated cost: **{_bps(hold.get('net_expected_alpha_bps'))}** · "
+            f"utility after conservative penalties: **{_bps(hold.get('utility_bps'))}**."
+        )
+
+
+def _alpha_policy_from_controls(
+    *,
+    mode: str,
+    enabled: list[str],
+    enabled_blends: list[str],
+    custom_blends: tuple[dict, ...],
+    manual_strategy: str,
+    switch_buffer: float,
+    rebalance_buffer: float,
+    turnover_penalty: float,
+    max_turnover: float,
+    risk_penalty_scale: float,
+    minimum_alpha: float,
+    alpha_halflife: int,
+    alpha_min_history: int,
+    fallback: bool,
+) -> SelectionPolicy:
+    return SelectionPolicy(
+        mode=mode,
+        enabled_strategy_ids=tuple(enabled),
+        enabled_blend_ids=tuple(enabled_blends),
+        custom_blends=custom_blends,
+        manual_strategy_id=manual_strategy,
+        switch_buffer_bps=float(switch_buffer),
+        rebalance_buffer_bps=float(rebalance_buffer),
+        turnover_penalty_bps=float(turnover_penalty),
+        max_one_way_turnover=float(max_turnover),
+        risk_penalty_scale=float(risk_penalty_scale),
+        min_expected_net_alpha_bps=float(minimum_alpha),
+        alpha_halflife=int(alpha_halflife),
+        alpha_min_history=int(alpha_min_history),
+        fallback_to_current=bool(fallback),
+    )
+
+
+def _max_alpha_policy(
+    policy: SelectionPolicy,
+    *,
+    enabled: list[str],
+    enabled_blends: list[str],
+    manual_strategy: str,
+    mode: str,
+) -> SelectionPolicy:
+    """Aggressive selector preset: keep real trading cost, remove incumbent bias."""
+    return _alpha_policy_from_controls(
+        mode=mode,
+        enabled=enabled,
+        enabled_blends=enabled_blends,
+        custom_blends=policy.custom_blends,
+        manual_strategy=manual_strategy,
+        switch_buffer=0.0,
+        rebalance_buffer=0.0,
+        turnover_penalty=0.0,
+        max_turnover=1.0,
+        risk_penalty_scale=0.0,
+        minimum_alpha=-25.0,
+        alpha_halflife=policy.alpha_halflife,
+        alpha_min_history=policy.alpha_min_history,
+        fallback=False,
+    )
 
 
 def render_frontier_coverage(
@@ -165,17 +279,32 @@ def _render_candidate_snapshot(row: pd.Series | None) -> None:
         return
     cols = st.columns(6)
     cols[0].metric("Candidate", str(row.get("candidate_id", "—")))
-    cols[1].metric("Action", str(row.get("action", "—")))
-    cols[2].metric("Utility", _bps(row.get("utility_bps")))
-    cols[3].metric("Net alpha", _bps(row.get("net_expected_alpha_bps", row.get("expected_alpha_bps"))))
-    cols[4].metric("Cost", _bps(row.get("estimated_cost_bps")))
-    cols[5].metric("Turnover", _pct(row.get("one_way_turnover")))
+    cols[1].metric("strategy_id", str(row.get("strategy_id", "—")))
+    cols[2].metric("Net alpha after est. cost", _bps(row.get("net_expected_alpha_bps", row.get("expected_alpha_bps"))))
+    cols[3].metric(
+        "Utility after conservative penalties",
+        _bps(row.get("utility_bps")),
+        help="Net alpha minus extra turnover and risk penalties. In deterministic mode, switch/hold buffers are applied when comparing to hold_current.",
+    )
+    cols[4].metric("Est. trading cost", _bps(row.get("estimated_cost_bps")))
+    cols[5].metric("One-way turnover", _pct(row.get("one_way_turnover")))
+
+    if str(row.get("candidate_id", "")) == "hold_current":
+        st.info(
+            "`hold_current` is a no-trade baseline. It keeps the current canonical holdings, "
+            f"which were predicated on **{row.get('current_strategy_provenance', row.get('strategy_id', 'cash'))}**."
+        )
 
     detail_cols = [
         column
         for column in [
             "candidate_id",
             "strategy_id",
+            "name",
+            "current_strategy_id",
+            "current_strategy_name",
+            "current_strategy_provenance",
+            "current_position_source",
             "action",
             "family",
             "maturity",
@@ -184,6 +313,8 @@ def _render_candidate_snapshot(row: pd.Series | None) -> None:
             "alpha_confidence",
             "estimated_cost_bps",
             "net_expected_alpha_bps",
+            "turnover_penalty_bps",
+            "risk_penalty_bps",
             "utility_bps",
             "one_way_turnover",
             "current_overlap",
@@ -217,18 +348,29 @@ def _render_board_table(board: pd.DataFrame) -> None:
             lambda row: "eligible" if _truthy(row.get("eligible")) else "; ".join(_blocked_reasons(row)),
             axis=1,
         )
+    if {"net_expected_alpha_bps", "utility_bps"} <= set(display.columns):
+        display["alpha_vs_utility_bps"] = (
+            pd.to_numeric(display["net_expected_alpha_bps"], errors="coerce")
+            - pd.to_numeric(display["utility_bps"], errors="coerce")
+        ).round(3)
     columns = [
         column
         for column in [
             "candidate_id",
+            "strategy_id",
+            "name",
+            "current_strategy_provenance",
             "decision_status",
             "action",
             "family",
             "eligible",
-            "utility_bps",
             "net_expected_alpha_bps",
+            "utility_bps",
+            "alpha_vs_utility_bps",
             "expected_alpha_bps",
             "estimated_cost_bps",
+            "turnover_penalty_bps",
+            "risk_penalty_bps",
             "one_way_turnover",
             "current_overlap",
             "sharpe_252d",
@@ -238,6 +380,11 @@ def _render_board_table(board: pd.DataFrame) -> None:
     ]
     if "utility_bps" in display.columns:
         display = display.sort_values("utility_bps", ascending=False)
+    st.caption(
+        "**Net alpha after estimated cost** = expected alpha minus estimated trading cost. "
+        "**Utility after conservative penalties** = net alpha minus extra turnover/risk penalties; "
+        "deterministic selection then compares against hold_current using the configured buffers."
+    )
     st.dataframe(display[columns], use_container_width=True, hide_index=True)
 
 
@@ -359,6 +506,7 @@ def _render_today_strategy_decision(service: StrategySelectionService, board: pd
     _render_context_status(service, board)
 
     st.markdown("### 1 · Review the roster")
+    _render_hold_current_explanation(service, board)
     _render_board_table(board)
     if not eligible_ids:
         st.error("No eligible candidate exists on the latest board. Do not activate.")
@@ -372,6 +520,7 @@ def _render_today_strategy_decision(service: StrategySelectionService, board: pd
         index=default_index,
         format_func=lambda cid: _candidate_label(eligible[eligible["candidate_id"].astype(str) == cid].iloc[0]),
         help="Choose one allowed candidate ID. Security weights stay immutable and deterministic.",
+        key="strategy_decision_candidate",
     )
     selected_row = eligible[eligible["candidate_id"].astype(str) == selected_candidate].iloc[0]
     _render_candidate_snapshot(selected_row)
@@ -380,8 +529,15 @@ def _render_today_strategy_decision(service: StrategySelectionService, board: pd
     if not hold.empty and selected_candidate != "hold_current":
         hold_row = hold.iloc[0]
         try:
-            delta = float(selected_row.get("utility_bps", 0.0)) - float(hold_row.get("utility_bps", 0.0))
-            st.caption(f"Edge versus holding current book: **{delta:.2f} bps utility**.")
+            utility_delta = float(selected_row.get("utility_bps", 0.0)) - float(hold_row.get("utility_bps", 0.0))
+            net_alpha_delta = float(selected_row.get("net_expected_alpha_bps", 0.0)) - float(
+                hold_row.get("net_expected_alpha_bps", hold_row.get("expected_alpha_bps", 0.0))
+            )
+            st.caption(
+                "Edge versus holding current book: "
+                f"**{net_alpha_delta:.2f} bps net alpha after estimated cost** · "
+                f"**{utility_delta:.2f} bps utility after conservative penalties**."
+            )
         except (TypeError, ValueError):
             pass
 
@@ -393,17 +549,19 @@ def _render_today_strategy_decision(service: StrategySelectionService, board: pd
         value=float(pending.get("confidence", 0.55) or 0.55),
         step=0.05,
         help="Use low confidence when the evidence is mixed. Low confidence still requires human review.",
+        key="strategy_decision_confidence",
     )
     default_reason = pending.get("reason") or (
-        f"Run {selected_candidate} today because it has the best reviewed utility after costs, turnover, "
-        "current-position overlap, regime context, and artifact checks."
+        f"Run {selected_candidate} today because it has the best reviewed balance of net alpha after estimated cost, "
+        "conservative utility penalties, turnover, current-position overlap, regime context, and artifact checks."
     )
     reason = st.text_area(
         "Plain-English PM rationale",
         value=str(default_reason),
         help="This becomes part of the review receipt. Keep it concise and evidence-based.",
+        key="strategy_decision_reason",
     )
-    if st.button("Write guarded decision", type="primary", disabled=not selected_candidate):
+    if st.button("Write guarded decision", type="primary", disabled=not selected_candidate, key="write_guarded_decision"):
         try:
             result = service.write_guarded_decision(
                 candidate_id=selected_candidate,
@@ -424,7 +582,9 @@ def _render_today_strategy_decision(service: StrategySelectionService, board: pd
     if pending:
         st.info(
             f"Pending decision: **{pending.get('candidate_id')}** · confidence "
-            f"{_pct(pending.get('confidence'))} · utility {_bps(pending.get('utility_bps'))}"
+            f"{_pct(pending.get('confidence'))} · net alpha after est. cost "
+            f"{_bps(pending.get('net_expected_alpha_bps', pending.get('expected_alpha_bps')))} · "
+            f"utility after conservative penalties {_bps(pending.get('utility_bps'))}"
         )
 
     st.markdown("### 3 · Run review checks")
@@ -446,12 +606,14 @@ def _render_today_strategy_decision(service: StrategySelectionService, board: pd
         f"Type `{expected}` to approve activation",
         value="",
         help="Activation writes the canonical portfolio artifact. It still does not submit broker orders.",
+        key="strategy_activation_confirm_text",
     )
     if st.button(
         "Approve today’s strategy",
         type="primary",
         disabled=typed.strip() != expected,
         help="Creates canonical weights only. Broker preflight remains separate in Portfolio Ops.",
+        key="approve_today_strategy",
     ):
         try:
             result = service.activate_latest()
@@ -506,7 +668,7 @@ def _render_strategy_registry_and_policy(service: StrategySelectionService) -> N
                 st.rerun()
     with st.expander("Build a custom chimera"):
         blend_name = st.text_input(
-            "Blend id (must start with `chimera_`)", value="chimera_custom"
+            "Blend id (must start with `chimera_`)", value="chimera_custom", key="chimera_builder_blend_id"
         )
         component_ids = st.multiselect(
             "Components (2-4 registered strategies)",
@@ -527,9 +689,9 @@ def _render_strategy_registry_and_policy(service: StrategySelectionService) -> N
                     key=f"chimera_builder_w_{sid}",
                 )
         hold_days = st.number_input(
-            "Minimum hold days", min_value=0, max_value=20, value=3
+            "Minimum hold days", min_value=0, max_value=20, value=3, key="chimera_builder_min_hold_days"
         )
-        if st.button("Save custom chimera", disabled=len(component_ids) < 2):
+        if st.button("Save custom chimera", disabled=len(component_ids) < 2, key="save_custom_chimera"):
             try:
                 total = sum(weights.values())
                 path = service.add_custom_blend({
@@ -549,6 +711,10 @@ def _render_strategy_registry_and_policy(service: StrategySelectionService) -> N
                 st.error(str(exc))
 
     st.subheader("Selection policy")
+    st.caption(
+        "Choose whether the selector should behave like a conservative PM or pursue max-alpha rotation. "
+        "Estimated trading cost is always shown separately from the extra conservative utility penalties."
+    )
     mode = st.radio(
         "Mode",
         ["deterministic", "agent", "manual"],
@@ -558,11 +724,13 @@ def _render_strategy_registry_and_policy(service: StrategySelectionService) -> N
             "Deterministic ranks and activates immediately; agent emits a board and waits for a validated "
             "decision; manual selects one registered strategy."
         ),
+        key="selection_policy_mode",
     )
     enabled = st.multiselect(
         "Enabled strategies",
         strategy_options,
         default=[value for value in policy.enabled_strategy_ids if value in strategy_options],
+        key="selection_policy_enabled_strategies",
     )
     blend_options = list(blends.index)
     enabled_blends = st.multiselect(
@@ -570,6 +738,7 @@ def _render_strategy_registry_and_policy(service: StrategySelectionService) -> N
         blend_options,
         default=[value for value in policy.enabled_blend_ids if value in blend_options],
         help="A blend is evaluated only when every component strategy is also enabled.",
+        key="selection_policy_enabled_blends",
     )
     manual_default = (
         strategy_options.index(policy.manual_strategy_id)
@@ -581,48 +750,108 @@ def _render_strategy_registry_and_policy(service: StrategySelectionService) -> N
         strategy_options,
         index=manual_default,
         disabled=mode != "manual",
+        key="selection_policy_manual_strategy",
     )
+
+    st.info(
+        "**Max alpha preset** sets switch/rebalance buffers to 0, removes the extra turnover/risk penalties, "
+        "raises max turnover to 100%, and disables fallback-to-current. It still displays estimated trading cost."
+    )
+    if st.button("Save MAX ALPHA policy preset", type="primary", key="save_max_alpha_policy"):
+        try:
+            updated = _max_alpha_policy(
+                policy,
+                enabled=enabled,
+                enabled_blends=enabled_blends,
+                manual_strategy=manual_strategy,
+                mode=mode,
+            )
+            path = service.save_policy(updated)
+            st.success(f"Saved max-alpha policy to {path}. Run a fresh candidate evaluation to rebuild the board.")
+            st.rerun()
+        except Exception as exc:
+            st.error(str(exc))
 
     left, right = st.columns(2)
     with left:
         switch_buffer = st.number_input(
-            "Switch buffer (bps)", min_value=0.0, max_value=25.0, value=float(policy.switch_buffer_bps), step=0.5
+            "Switch buffer (bps)",
+            min_value=0.0,
+            max_value=25.0,
+            value=float(policy.switch_buffer_bps),
+            step=0.5,
+            key="selection_policy_switch_buffer",
+            help="Extra edge required before switching away from the current holdings.",
         )
         rebalance_buffer = st.number_input(
-            "Same-strategy rebalance buffer (bps)", min_value=0.0, max_value=10.0, value=float(policy.rebalance_buffer_bps), step=0.25
+            "Same-strategy rebalance buffer (bps)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(policy.rebalance_buffer_bps),
+            step=0.25,
+            key="selection_policy_rebalance_buffer",
         )
         max_turnover = st.slider(
-            "Maximum one-way turnover", min_value=0.05, max_value=1.0, value=float(policy.max_one_way_turnover), step=0.01
+            "Maximum one-way turnover",
+            min_value=0.05,
+            max_value=1.0,
+            value=float(policy.max_one_way_turnover),
+            step=0.01,
+            key="selection_policy_max_turnover",
         )
     with right:
         turnover_penalty = st.number_input(
-            "Extra turnover penalty (bps per 100%)", min_value=0.0, max_value=25.0, value=float(policy.turnover_penalty_bps), step=0.5
+            "Extra turnover penalty (bps per 100%)",
+            min_value=0.0,
+            max_value=25.0,
+            value=float(policy.turnover_penalty_bps),
+            step=0.5,
+            key="selection_policy_turnover_penalty",
+            help="Additional conservative penalty beyond estimated trading cost.",
+        )
+        risk_penalty_scale = st.number_input(
+            "Risk penalty scale",
+            min_value=0.0,
+            max_value=0.50,
+            value=float(policy.risk_penalty_scale),
+            step=0.01,
+            key="selection_policy_risk_penalty_scale",
         )
         minimum_alpha = st.number_input(
-            "Minimum net expected alpha (bps)", min_value=-25.0, max_value=25.0, value=float(policy.min_expected_net_alpha_bps), step=0.5
+            "Minimum net expected alpha (bps)",
+            min_value=-25.0,
+            max_value=25.0,
+            value=float(policy.min_expected_net_alpha_bps),
+            step=0.5,
+            key="selection_policy_minimum_alpha",
         )
-        fallback = st.checkbox("Fall back to current portfolio", value=bool(policy.fallback_to_current))
+        fallback = st.checkbox(
+            "Fall back to current portfolio",
+            value=bool(policy.fallback_to_current),
+            key="selection_policy_fallback_current",
+            help="When on, hold_current can win unless a candidate clears the configured buffer.",
+        )
 
-    if st.button("Save strategy-selection policy", type="primary"):
+    if st.button("Save strategy-selection policy", type="primary", key="save_strategy_selection_policy"):
         try:
-            updated = SelectionPolicy(
+            updated = _alpha_policy_from_controls(
                 mode=mode,
-                enabled_strategy_ids=tuple(enabled),
-                enabled_blend_ids=tuple(enabled_blends),
+                enabled=enabled,
+                enabled_blends=enabled_blends,
                 custom_blends=policy.custom_blends,
-                manual_strategy_id=manual_strategy,
-                switch_buffer_bps=float(switch_buffer),
-                rebalance_buffer_bps=float(rebalance_buffer),
-                turnover_penalty_bps=float(turnover_penalty),
-                max_one_way_turnover=float(max_turnover),
-                risk_penalty_scale=policy.risk_penalty_scale,
-                min_expected_net_alpha_bps=float(minimum_alpha),
+                manual_strategy=manual_strategy,
+                switch_buffer=switch_buffer,
+                rebalance_buffer=rebalance_buffer,
+                turnover_penalty=turnover_penalty,
+                max_turnover=max_turnover,
+                risk_penalty_scale=risk_penalty_scale,
+                minimum_alpha=minimum_alpha,
                 alpha_halflife=policy.alpha_halflife,
                 alpha_min_history=policy.alpha_min_history,
-                fallback_to_current=bool(fallback),
+                fallback=fallback,
             )
             path = service.save_policy(updated)
-            st.success(f"Saved policy to {path}")
+            st.success(f"Saved policy to {path}. Run a fresh candidate evaluation to rebuild the board.")
         except Exception as exc:
             st.error(str(exc))
 
@@ -632,21 +861,23 @@ def _render_candidate_evaluation(service: StrategySelectionService) -> None:
     render_frontier_coverage(service, allow_enable=False)
     run_left, run_middle, run_right = st.columns(3)
     with run_left:
-        evaluation_start = st.text_input("Evaluation start", value="2020-01-01")
+        evaluation_start = st.text_input("Evaluation start", value="2020-01-01", key="strategy_eval_start")
     with run_middle:
         evaluation_provider = st.selectbox(
             "Market-data provider",
             ["yf", "tasty"],
             help="Tasty requires configured credentials and available candle history.",
+            key="strategy_eval_provider",
         )
     with run_right:
-        force_evaluation = st.checkbox("Allow holiday/weekend evaluation", value=True)
+        force_evaluation = st.checkbox("Allow holiday/weekend evaluation", value=True, key="strategy_eval_force")
     evaluate_full_frontier = st.checkbox(
         "Evaluate the entire roster frontier",
         value=True,
         help="Enable every default strategy and chimera before running so the board covers the whole roster.",
+        key="strategy_eval_full_frontier",
     )
-    if st.button("Run fresh candidate evaluation"):
+    if st.button("Run fresh candidate evaluation", key="run_fresh_candidate_evaluation"):
         try:
             spinner_text = "Computing the full roster frontier..." if evaluate_full_frontier else "Computing enabled candidates..."
             with st.spinner(spinner_text):
