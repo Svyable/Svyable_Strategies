@@ -1,8 +1,10 @@
 """Runtime settings for Tastytrade connectivity and dashboard safety.
 
 Secrets are loaded from the environment (optionally via ``engine/.env``). The
-``TASTY_*`` names are canonical. A small set of legacy ``TT_*`` aliases remains
-accepted for OAuth/account migration only; username/password session auth has
+mode-specific ``TASTY_SANDBOX_*`` and ``TASTY_PROD_*`` names are preferred for
+Streamlit sandbox/production switching. Generic ``TASTY_*`` names remain
+accepted as a backward-compatible fallback; legacy ``TT_*`` aliases remain
+accepted for OAuth/account migration only. Username/password session auth has
 been removed from all runtime transports.
 """
 
@@ -35,6 +37,26 @@ def _first_env(*names: str, default: str = "") -> str:
     return default
 
 
+def broker_env_prefix(is_test: bool) -> str:
+    """Return the preferred environment-variable prefix for a broker mode."""
+    return "TASTY_SANDBOX" if is_test else "TASTY_PROD"
+
+
+def broker_mode_name(is_test: bool) -> str:
+    """Return the stable runtime mode name used by logs, cache keys, and UI."""
+    return "sandbox" if is_test else "production"
+
+
+def broker_env_var(is_test: bool, suffix: str) -> str:
+    """Return the preferred mode-specific env var for ``suffix``."""
+    return f"{broker_env_prefix(is_test)}_{suffix}"
+
+
+def broker_env_var_help(is_test: bool, suffix: str) -> str:
+    """Human-readable primary/fallback env var guidance for one credential."""
+    return f"{broker_env_var(is_test, suffix)} (or TASTY_{suffix})"
+
+
 @dataclass(frozen=True)
 class TastySettings:
     client_secret: str
@@ -52,7 +74,17 @@ class TastySettings:
 
     @property
     def environment(self) -> str:
-        return "sandbox" if self.is_test else "production"
+        return broker_mode_name(self.is_test)
+
+    @property
+    def env_prefix(self) -> str:
+        return broker_env_prefix(self.is_test)
+
+    def env_var(self, suffix: str) -> str:
+        return broker_env_var(self.is_test, suffix)
+
+    def env_var_help(self, suffix: str) -> str:
+        return broker_env_var_help(self.is_test, suffix)
 
     @property
     def api_base(self) -> str:
@@ -77,26 +109,52 @@ class TastySettings:
         return bool(self.client_secret and self.refresh_token)
 
     @classmethod
-    def from_env(cls, *, require_credentials: bool = True) -> "TastySettings":
+    def from_env_for_mode(
+        cls, *, is_test: bool, require_credentials: bool = True
+    ) -> "TastySettings":
+        """Load settings for one explicit broker mode.
+
+        Mode-specific names are preferred so Streamlit can switch SANDBOX ⇄
+        PRODUCTION without mutating process-wide ``TASTY_IS_TEST`` or relying on a
+        single shared token/account. Generic names remain fallbacks for existing
+        installs that have only one configured profile.
+        """
         load_dotenv()
 
-        client_secret = _first_env("TASTY_CLIENT_SECRET", "TT_CLIENT_SECRET")
-        refresh_token = _first_env("TASTY_REFRESH_TOKEN", "TT_REFRESH_TOKEN")
-        account_number = _first_env("TASTY_ACCOUNT_NUMBER", "TT_ACCOUNT")
-        client_id = _first_env("TASTY_CLIENT_ID", "TT_CLIENT_ID")
-        redirect_uri = _first_env("TASTY_REDIRECT_URI", "TT_REDIRECT_URI")
+        prefix = broker_env_prefix(is_test)
+        mode = broker_mode_name(is_test)
+        audit_override = (
+            f"SVYABLE_{'SANDBOX' if is_test else 'PROD'}_TASTY_AUDIT_PATH"
+        )
 
-        explicit_test = os.getenv("TASTY_IS_TEST")
-        if explicit_test is None:
-            legacy_env = _first_env("SVYABLE_ENV", "TT_ENV", default="sandbox").lower()
-            is_test = legacy_env != "production"
-        else:
-            is_test = _as_bool(explicit_test, default=True)
+        client_secret = _first_env(
+            f"{prefix}_CLIENT_SECRET",
+            "TASTY_CLIENT_SECRET",
+            "TT_CLIENT_SECRET",
+        )
+        refresh_token = _first_env(
+            f"{prefix}_REFRESH_TOKEN",
+            "TASTY_REFRESH_TOKEN",
+            "TT_REFRESH_TOKEN",
+        )
+        account_number = _first_env(
+            f"{prefix}_ACCOUNT_NUMBER",
+            "TASTY_ACCOUNT_NUMBER",
+            "TT_ACCOUNT",
+        )
+        client_id = _first_env(f"{prefix}_CLIENT_ID", "TASTY_CLIENT_ID", "TT_CLIENT_ID")
+        redirect_uri = _first_env(
+            f"{prefix}_REDIRECT_URI", "TASTY_REDIRECT_URI", "TT_REDIRECT_URI"
+        )
 
         live_enabled = _as_bool(os.getenv("SVYABLE_ENABLE_LIVE"), default=False)
         default_out = "outputs" if is_test else "outputs-production"
         audit_path = Path(
-            os.getenv("SVYABLE_TASTY_AUDIT_PATH", f"{default_out}/audit/tastytrade.jsonl")
+            _first_env(
+                audit_override,
+                "SVYABLE_TASTY_AUDIT_PATH",
+                default=f"{default_out}/audit/tastytrade.jsonl",
+            )
         )
         warn_bps = _as_float(os.getenv("SVYABLE_SLIPPAGE_WARN_BPS"), 15.0)
         critical_bps = _as_float(os.getenv("SVYABLE_SLIPPAGE_CRITICAL_BPS"), 30.0)
@@ -106,17 +164,18 @@ class TastySettings:
             )
 
         missing = [
-            name
-            for name, value in {
-                "TASTY_CLIENT_SECRET": client_secret,
-                "TASTY_REFRESH_TOKEN": refresh_token,
-                "TASTY_ACCOUNT_NUMBER": account_number,
+            broker_env_var_help(is_test, suffix)
+            for suffix, value in {
+                "CLIENT_SECRET": client_secret,
+                "REFRESH_TOKEN": refresh_token,
+                "ACCOUNT_NUMBER": account_number,
             }.items()
             if not value
         ]
         if require_credentials and missing:
             raise ValueError(
-                "Missing Tastytrade environment variables: " + ", ".join(missing)
+                f"Missing Tastytrade {mode} environment variables: "
+                + ", ".join(missing)
             )
 
         return cls(
@@ -130,4 +189,19 @@ class TastySettings:
             slippage_critical_bps=critical_bps,
             client_id=client_id,
             redirect_uri=redirect_uri,
+        )
+
+    @classmethod
+    def from_env(cls, *, require_credentials: bool = True) -> "TastySettings":
+        load_dotenv()
+
+        explicit_test = os.getenv("TASTY_IS_TEST")
+        if explicit_test is None:
+            legacy_env = _first_env("SVYABLE_ENV", "TT_ENV", default="sandbox").lower()
+            is_test = legacy_env != "production"
+        else:
+            is_test = _as_bool(explicit_test, default=True)
+
+        return cls.from_env_for_mode(
+            is_test=is_test, require_credentials=require_credentials
         )

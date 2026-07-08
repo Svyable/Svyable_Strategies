@@ -32,48 +32,50 @@ def auth_state(settings: TastySettings) -> tuple[bool, bool, str]:
     * ``message`` — a human explanation of the current state.
     """
     missing = [
-        name
-        for name, value in (
-            ("TASTY_CLIENT_ID", settings.client_id),
-            ("TASTY_CLIENT_SECRET", settings.client_secret),
-            ("TASTY_REDIRECT_URI", settings.redirect_uri),
+        settings.env_var_help(suffix)
+        for suffix, value in (
+            ("CLIENT_ID", settings.client_id),
+            ("CLIENT_SECRET", settings.client_secret),
+            ("REDIRECT_URI", settings.redirect_uri),
         )
         if not value
     ]
     can_authorize = not missing
+    mode = settings.environment.upper()
 
     if not settings.refresh_token:
         if missing:
             return True, can_authorize, (
-                "Cannot authorize yet — set "
+                f"Cannot authorize {mode} yet — set "
                 + ", ".join(missing)
                 + " in engine/.env first."
             )
         return True, can_authorize, (
-            "No refresh token yet. Authorize once to connect the broker; the daily "
-            "loop refreshes silently afterward."
+            f"No {mode} refresh token yet. Authorize once to connect this "
+            "broker profile; the daily loop refreshes silently afterward."
         )
 
     return False, can_authorize, (
-        "Connected — a refresh token is present and the daily loop refreshes it "
-        "silently. Re-authorize only if it was revoked or expired."
+        f"Connected to {mode} — a refresh token is present for this broker "
+        "profile. Re-authorize only if it was revoked or expired."
     )
 
 
-def _run_authorization(env_path: Path) -> None:
+def _run_authorization(settings: TastySettings, env_path: Path) -> None:
     """Drive the interactive OAuth flow, then reload the token into this process."""
     from dotenv import load_dotenv
 
     from svyable.oauth import authorize
 
     st.info(
-        "A browser window will open for Tastytrade sign-in and Duo 2FA. Approve it, "
-        "then return here. If no browser opens, the sign-in URL is printed in the "
-        "terminal running the console. Waiting up to 5 minutes for the redirect…"
+        f"A browser window will open for Tastytrade {settings.environment} sign-in "
+        "and Duo 2FA. Approve it, then return here. If no browser opens, the "
+        "sign-in URL is printed in the terminal running the console. Waiting up "
+        "to 5 minutes for the redirect…"
     )
     try:
         with st.spinner("Waiting for the Tastytrade authorization redirect…"):
-            summary = authorize(env_path, open_browser=True)
+            summary = authorize(env_path, open_browser=True, settings=settings)
     except Exception as exc:  # noqa: BLE001 — surface cleanly, never leak secrets
         st.error(f"Authorization failed: {exc}")
         return
@@ -83,8 +85,10 @@ def _run_authorization(env_path: Path) -> None:
     load_dotenv(env_path, override=True)
     st.cache_resource.clear()
     st.success(
-        f"Authorized ✓  account {summary.get('account_number')}  ·  "
-        f"refresh token {summary.get('refresh_token')} written to {env_path.name}"
+        f"Authorized ✓  {summary.get('environment')} account "
+        f"{summary.get('account_number')}  ·  refresh token "
+        f"{summary.get('refresh_token')} written to {env_path.name} "
+        f"as {', '.join(summary.get('wrote', []))}"
     )
     st.rerun()
 
@@ -101,7 +105,11 @@ def render_auth_controls(settings: TastySettings, env_path: Path | None = None) 
         f"redirect: `{settings.redirect_uri or 'not set'}`"
     )
 
-    label = "🔐 Authorize Tastytrade" if needs_auth else "Re-authorize Tastytrade"
+    label = (
+        f"🔐 Authorize Tastytrade {settings.environment}"
+        if needs_auth
+        else f"Re-authorize Tastytrade {settings.environment}"
+    )
     if st.button(
         label,
         disabled=not can_authorize,
@@ -109,4 +117,4 @@ def render_auth_controls(settings: TastySettings, env_path: Path | None = None) 
         use_container_width=True,
         help=None if can_authorize else "Missing OAuth app credentials in engine/.env.",
     ):
-        _run_authorization(env_path)
+        _run_authorization(settings, env_path)

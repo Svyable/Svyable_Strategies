@@ -47,9 +47,21 @@ class DashboardService(ExecutionBackfillMixin, ExecutionControlMixin):
     @property
     def broker(self) -> TastySdkBroker:
         if self._broker is None:
-            settings = TastySettings.from_env(require_credentials=True)
-            settings = replace(settings, audit_path=self.settings.audit_path)
-            self._broker = TastySdkBroker(settings=settings)
+            missing = [
+                self.settings.env_var_help(suffix)
+                for suffix, value in {
+                    "CLIENT_SECRET": self.settings.client_secret,
+                    "REFRESH_TOKEN": self.settings.refresh_token,
+                    "ACCOUNT_NUMBER": self.settings.account_number,
+                }.items()
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    f"Missing Tastytrade {self.settings.environment} credentials: "
+                    + ", ".join(missing)
+                )
+            self._broker = TastySdkBroker(settings=self.settings)
         return self._broker
 
     @property

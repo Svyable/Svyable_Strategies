@@ -15,6 +15,7 @@ Nothing here is ever logged in cleartext. Secrets are masked in all output.
 
 from __future__ import annotations
 
+import os
 import secrets
 import threading
 import urllib.parse
@@ -154,21 +155,51 @@ def update_env_file(env_path: Path, updates: dict[str, str]) -> None:
     for key, value in remaining.items():
         out.append(f"{key}={value}")
     env_path.write_text("\n".join(out) + "\n")
+    try:
+        os.chmod(env_path, 0o600)
+    except OSError:
+        pass
 
 
-def authorize(env_path: Path, *, open_browser: bool = True, scope: str = "") -> dict:
+def authorization_problem_names(settings: TastySettings) -> list[str]:
+    """Return missing OAuth app credential names for the selected broker mode."""
+    problems = []
+    for suffix, value in (
+        ("CLIENT_ID", settings.client_id),
+        ("CLIENT_SECRET", settings.client_secret),
+        ("REDIRECT_URI", settings.redirect_uri),
+    ):
+        if not value:
+            problems.append(settings.env_var_help(suffix))
+    if not settings.redirect_uri:
+        problems[-1] += " — must match the value registered on the OAuth app"
+    return problems
+
+
+def token_update_keys(settings: TastySettings, account: str | None) -> dict[str, str]:
+    """Return the profile-specific `.env` updates produced by authorization."""
+    updates = {settings.env_var("REFRESH_TOKEN"): ""}
+    if account:
+        updates[settings.env_var("ACCOUNT_NUMBER")] = account
+    return updates
+
+
+def authorize(
+    env_path: Path,
+    *,
+    open_browser: bool = True,
+    scope: str = "",
+    settings: TastySettings | None = None,
+) -> dict:
     """Full interactive onboarding. Writes refresh token + account to `env_path`.
 
+    The selected ``settings`` controls whether the sandbox or production OAuth
+    host is used and which profile-specific ``TASTY_SANDBOX_*`` /
+    ``TASTY_PROD_*`` keys receive the resulting refresh token.
     Returns a redacted summary dict — never the raw tokens.
     """
-    settings = TastySettings.from_env(require_credentials=False)
-    problems = []
-    if not settings.client_id:
-        problems.append("TASTY_CLIENT_ID")
-    if not settings.client_secret:
-        problems.append("TASTY_CLIENT_SECRET")
-    if not settings.redirect_uri:
-        problems.append("TASTY_REDIRECT_URI (must match the value registered on the OAuth app)")
+    settings = settings or TastySettings.from_env(require_credentials=False)
+    problems = authorization_problem_names(settings)
     if problems:
         raise RuntimeError("Set these in engine/.env before authorizing: " + ", ".join(problems))
 
@@ -197,15 +228,15 @@ def authorize(env_path: Path, *, open_browser: bool = True, scope: str = "") -> 
         raise RuntimeError("token endpoint returned no refresh_token")
 
     account = discover_account_number(settings, access_token) or settings.account_number
-    updates = {"TASTY_REFRESH_TOKEN": refresh_token}
-    if account:
-        updates["TASTY_ACCOUNT_NUMBER"] = account
+    updates = token_update_keys(settings, account)
+    updates[settings.env_var("REFRESH_TOKEN")] = refresh_token
     update_env_file(env_path, updates)
 
     return {
         "environment": settings.environment,
         "refresh_token": mask(refresh_token),
-        "account_number": account or "<none discovered — set TASTY_ACCOUNT_NUMBER manually>",
+        "account_number": account
+        or f"<none discovered — set {settings.env_var('ACCOUNT_NUMBER')} manually>",
         "env_file": str(env_path),
         "wrote": sorted(updates),
     }

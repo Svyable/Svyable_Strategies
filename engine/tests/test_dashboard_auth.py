@@ -28,6 +28,7 @@ def test_connected_when_refresh_token_present():
     assert needs_auth is False
     assert can_authorize is True
     assert "Connected" in message
+    assert "SANDBOX" in message
 
 
 def test_needs_auth_when_refresh_token_missing_but_app_creds_present():
@@ -35,6 +36,7 @@ def test_needs_auth_when_refresh_token_missing_but_app_creds_present():
     assert needs_auth is True
     assert can_authorize is True
     assert "Authorize once" in message
+    assert "SANDBOX" in message
 
 
 def test_cannot_authorize_when_app_creds_missing():
@@ -43,5 +45,23 @@ def test_cannot_authorize_when_app_creds_missing():
     )
     assert needs_auth is True
     assert can_authorize is False
+    assert "TASTY_SANDBOX_CLIENT_SECRET" in message
     assert "TASTY_CLIENT_SECRET" in message
+    assert "TASTY_SANDBOX_REDIRECT_URI" in message
     assert "TASTY_REDIRECT_URI" in message
+
+
+def test_production_auth_state_names_prod_profile_variables():
+    needs_auth, can_authorize, message = auth_state(
+        _settings(
+            is_test=False,
+            refresh_token="",
+            client_secret="",
+            redirect_uri="",
+        )
+    )
+    assert needs_auth is True
+    assert can_authorize is False
+    assert "PRODUCTION" in message
+    assert "TASTY_PROD_CLIENT_SECRET" in message
+    assert "TASTY_PROD_REDIRECT_URI" in message
