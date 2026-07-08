@@ -120,7 +120,13 @@ def _render_factor_library(snapshot: dict) -> None:
     if "ic_ir" in combined.columns:
         ranked = combined.set_index("factor")["ic_ir"].astype(float).sort_values()
         if len(ranked) >= 2:
-            n = st.slider("Factors to show (by |IC-IR| extremes)", 2, min(30, len(ranked)), min(15, len(ranked)))
+            n = st.slider(
+                "Factors to show (by |IC-IR| extremes)",
+                2,
+                min(30, len(ranked)),
+                min(15, len(ranked)),
+                key="factor_library_extreme_count",
+            )
             half = n // 2
             extremes = pd.concat([ranked.head(half), ranked.tail(n - half)])
             render_figure(charts.signed_bar_chart(extremes, title="Factor information ratio (best & worst)", xlabel="IC-IR"))
@@ -131,7 +137,7 @@ def _render_sleeve_factor_weights(snapshot: dict) -> None:
     if not factor_weights:
         st.info("No per-sleeve factor weights yet.")
         return
-    sleeve = st.selectbox("Sleeve", sorted(factor_weights.keys()))
+    sleeve = st.selectbox("Sleeve", sorted(factor_weights.keys()), key="factor_weights_sleeve")
     frame = factor_weights.get(sleeve, pd.DataFrame())
     if frame.empty:
         st.caption("No weights for this sleeve.")
