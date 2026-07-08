@@ -167,9 +167,9 @@ def render_comparison(curves: dict[str, pd.Series], registry: pd.DataFrame | Non
     st.subheader("Head-to-head")
     names = sorted(usable.keys())
     cols = st.columns(2)
-    base_name = cols[0].selectbox("Strategy A", names, index=0)
+    base_name = cols[0].selectbox("Strategy A", names, index=0, key="comparison_strategy_a")
     other_default = 1 if len(names) > 1 else 0
-    other_name = cols[1].selectbox("Strategy B", names, index=other_default)
+    other_name = cols[1].selectbox("Strategy B", names, index=other_default, key="comparison_strategy_b")
     if base_name != other_name:
         overlay = {base_name: usable[base_name], other_name: usable[other_name]}
         render_figure(charts.multi_equity_chart(overlay, highlight=base_name, title=f"{base_name} vs {other_name}"))
@@ -179,7 +179,7 @@ def render_comparison(curves: dict[str, pd.Series], registry: pd.DataFrame | Non
             st.markdown(f"**Relative performance** — {base_name} minus {other_name} (positive = A ahead)")
             st.line_chart(spread)
 
-        window = st.slider("Rolling correlation window", 21, 252, 63, step=7)
+        window = st.slider("Rolling correlation window", 21, 252, 63, step=7, key="comparison_rolling_corr_window")
         roll = rolling_correlation(usable[base_name], usable[other_name], window)
         if not roll.empty:
             st.markdown("**Rolling correlation** — is their diversification stable?")
