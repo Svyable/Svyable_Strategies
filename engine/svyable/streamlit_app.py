@@ -1,8 +1,8 @@
 """Interactive Svyable Tastytrade and agentic strategy operations console.
 
-The default app is intentionally compact: Command Center first, then Agent Lab,
-Analytics, Factors, Portfolio Ops, and Audit. Broker/rebalance controls are
-consolidated under Portfolio Ops rather than split across multiple top-level tabs.
+The default app opens on Agentic PM: current broker positions and proposed
+market-open transactions first, with research, diagnostics, and specialized
+broker workflows tucked behind secondary tabs.
 """
 
 from __future__ import annotations
@@ -110,13 +110,13 @@ def service_for(environment: str, output_root: str) -> DashboardService:
 
 def render() -> None:
     st.set_page_config(
-        page_title="Svyable PM Command Center",
+        page_title="Svyable Agentic PM",
         page_icon="🧠",
         layout="wide",
         menu_items={
             "about": (
-                "Svyable agentic portfolio and Tastytrade operations console. Sandbox is the safe default; "
-                "production is observation-first with gated submission."
+                "Svyable Agentic PM for current holdings, proposed Tastytrade transactions, "
+                "and gated portfolio operations."
             )
         },
     )
@@ -129,7 +129,7 @@ def render() -> None:
     connected = broker_ready(settings)
     frontier = strategy_service.frontier_status()
 
-    st.title("Svyable PM Command Center")
+    st.title("Svyable Agentic PM")
     if settings.is_test:
         st.success(
             "SANDBOX / TEST MODE — broker submissions use the sandbox session. "
@@ -198,7 +198,7 @@ def render() -> None:
 
     tabs = st.tabs(
         [
-            "🧠 Command Center",
+            "🧠 Agentic PM",
             "🤖 Agent Lab",
             "📈 Analytics",
             "🧬 Factors",
@@ -218,7 +218,3 @@ def render() -> None:
         render_portfolio_ops(service, settings)
     with tabs[5]:
         render_audit(service)
-
-
-if __name__ == "__main__":
-    render()
